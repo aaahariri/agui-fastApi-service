@@ -90,7 +90,7 @@ class TestA2UIComponentModel:
     def test_valid_component_creation(self):
         """Test creating a valid A2UI component."""
         component = A2UIComponent(
-            type="a2ui.StatCard",
+            type="statCard",
             id="stat-1",
             props={
                 "value": "$196B",
@@ -100,7 +100,7 @@ class TestA2UIComponentModel:
             }
         )
 
-        assert component.type == "a2ui.StatCard"
+        assert component.type == "statCard"
         assert component.id == "stat-1"
         assert component.props["value"] == "$196B"
         assert component.props["label"] == "AI Market Size"
@@ -141,23 +141,22 @@ class TestA2UIComponentModel:
         assert component.children["details"] == ["table-1", "chart-1"]
 
     def test_invalid_component_type_format(self):
-        """Test that component type must start with 'a2ui.'"""
+        """Test that component type rejects empty strings."""
         with pytest.raises(ValidationError) as exc_info:
             A2UIComponent(
-                type="StatCard",  # Missing "a2ui." prefix
+                type="",  # Empty type should be rejected
                 id="stat-1",
                 props={"value": "100"}
             )
 
         # Check that validation error occurred for the type field
-        assert "type" in str(exc_info.value)
-        assert "pattern" in str(exc_info.value).lower()
+        assert "type" in str(exc_info.value).lower()
 
     def test_invalid_component_type_pattern(self):
-        """Test that component type must follow PascalCase after 'a2ui.'"""
+        """Test that component type rejects whitespace-only strings."""
         with pytest.raises(ValidationError):
             A2UIComponent(
-                type="a2ui.stat_card",  # Should be PascalCase
+                type="   ",  # Whitespace-only should be rejected
                 id="stat-1",
                 props={"value": "100"}
             )
@@ -166,7 +165,7 @@ class TestA2UIComponentModel:
         """Test that component ID cannot be empty."""
         with pytest.raises(ValidationError) as exc_info:
             A2UIComponent(
-                type="a2ui.StatCard",
+                type="statCard",
                 id="",
                 props={"value": "100"}
             )
@@ -199,7 +198,7 @@ class TestA2UIComponentModel:
     def test_component_exclude_none(self):
         """Test that None values can be excluded from serialization."""
         component = A2UIComponent(
-            type="a2ui.StatCard",
+            type="statCard",
             id="stat-1",
             props={"value": "100"}
         )
@@ -218,8 +217,8 @@ class TestGenerateID:
 
     def test_generate_id_with_prefix(self):
         """Test ID generation with custom prefix."""
-        id1 = generate_id("a2ui.StatCard", prefix="stat")
-        id2 = generate_id("a2ui.StatCard", prefix="stat")
+        id1 = generate_id("statCard", prefix="stat")
+        id2 = generate_id("statCard", prefix="stat")
         id3 = generate_id("a2ui.VideoCard", prefix="video")
 
         assert id1 == "stat-1"
@@ -228,9 +227,9 @@ class TestGenerateID:
 
     def test_generate_id_without_prefix(self):
         """Test ID generation without prefix (extracts from component type)."""
-        id1 = generate_id("a2ui.StatCard")
+        id1 = generate_id("statCard")
         id2 = generate_id("a2ui.VideoCard")
-        id3 = generate_id("a2ui.HeadlineCard")
+        id3 = generate_id("headlineCard")
 
         assert id1 == "stat-card-1"
         assert id2 == "video-card-2"
@@ -240,11 +239,11 @@ class TestGenerateID:
         """Test PascalCase to kebab-case conversion."""
         reset_id_counter()
 
-        id1 = generate_id("a2ui.TLDR")
+        id1 = generate_id("tldr")
         id2 = generate_id("a2ui.ExecutiveSummary")
         id3 = generate_id("a2ui.TableOfContents")
 
-        assert id1 == "t-l-d-r-1"
+        assert id1 == "tldr-1"
         assert id2 == "executive-summary-2"
         assert id3 == "table-of-contents-3"
 
@@ -252,7 +251,7 @@ class TestGenerateID:
         """Test that generated IDs are unique."""
         ids = set()
         for i in range(100):
-            new_id = generate_id("a2ui.StatCard", prefix="stat")
+            new_id = generate_id("statCard", prefix="stat")
             assert new_id not in ids
             ids.add(new_id)
 
@@ -260,15 +259,15 @@ class TestGenerateID:
 
     def test_reset_id_counter(self):
         """Test that reset_id_counter() resets the counter."""
-        id1 = generate_id("a2ui.StatCard", prefix="stat")
+        id1 = generate_id("statCard", prefix="stat")
         assert id1 == "stat-1"
 
-        id2 = generate_id("a2ui.StatCard", prefix="stat")
+        id2 = generate_id("statCard", prefix="stat")
         assert id2 == "stat-2"
 
         reset_id_counter()
 
-        id3 = generate_id("a2ui.StatCard", prefix="stat")
+        id3 = generate_id("statCard", prefix="stat")
         assert id3 == "stat-1"  # Counter reset
 
 
@@ -282,12 +281,12 @@ class TestGenerateComponent:
     def test_generate_valid_component(self):
         """Test generating a valid component."""
         component = generate_component(
-            "a2ui.StatCard",
+            "statCard",
             props={"value": "$196B", "label": "Market Size", "trend": "up"}
         )
 
         assert isinstance(component, A2UIComponent)
-        assert component.type == "a2ui.StatCard"
+        assert component.type == "statCard"
         assert component.id == "stat-card-1"
         assert component.props["value"] == "$196B"
 
@@ -312,20 +311,21 @@ class TestGenerateComponent:
         assert component.children == ["stat-1", "stat-2"]
 
     def test_generate_component_invalid_type(self):
-        """Test that invalid component type raises ValueError."""
-        with pytest.raises(ValueError) as exc_info:
-            generate_component(
-                "a2ui.InvalidComponent",
-                props={"value": "test"}
-            )
+        """Test that invalid component type warns but still creates component."""
+        # generate_component now warns instead of raising for unknown types
+        component = generate_component(
+            "a2ui.InvalidComponent",
+            props={"value": "test"}
+        )
 
-        assert "Invalid component type" in str(exc_info.value)
-        assert "a2ui.InvalidComponent" in str(exc_info.value)
+        assert isinstance(component, A2UIComponent)
+        assert component.type == "a2ui.InvalidComponent"
+        assert component.props["value"] == "test"
 
     def test_generate_component_auto_id_generation(self):
         """Test that components get sequential auto-generated IDs."""
-        c1 = generate_component("a2ui.StatCard", props={"value": "1"})
-        c2 = generate_component("a2ui.StatCard", props={"value": "2"})
+        c1 = generate_component("statCard", props={"value": "1"})
+        c2 = generate_component("statCard", props={"value": "2"})
         c3 = generate_component("a2ui.VideoCard", props={"videoId": "123", "platform": "youtube"})
 
         assert c1.id == "stat-card-1"
@@ -344,8 +344,8 @@ class TestEmitComponents:
     async def test_emit_components_ag_ui_format(self):
         """Test emitting components in AG-UI SSE format."""
         components = [
-            generate_component("a2ui.StatCard", props={"value": "100", "label": "Users"}),
-            generate_component("a2ui.StatCard", props={"value": "50", "label": "Active"}),
+            generate_component("statCard", props={"value": "100", "label": "Users"}),
+            generate_component("statCard", props={"value": "50", "label": "Active"}),
         ]
 
         events = []
@@ -359,7 +359,7 @@ class TestEmitComponents:
         # Parse the JSON from the event
         json_str = events[0].replace("data: ", "").strip()
         data = json.loads(json_str)
-        assert data["type"] == "a2ui.StatCard"
+        assert data["type"] == "statCard"
         assert data["id"] == "stat-card-1"
         assert data["props"]["value"] == "100"
 
@@ -385,7 +385,7 @@ class TestEmitComponents:
     async def test_emit_components_invalid_format(self):
         """Test that invalid stream format raises ValueError."""
         components = [
-            generate_component("a2ui.StatCard", props={"value": "100", "label": "Test"}),
+            generate_component("statCard", props={"value": "100", "label": "Test"}),
         ]
 
         with pytest.raises(ValueError) as exc_info:
@@ -407,7 +407,7 @@ class TestEmitComponents:
     async def test_emit_components_exclude_none(self):
         """Test that None values are excluded from emitted JSON."""
         component = generate_component(
-            "a2ui.StatCard",
+            "statCard",
             props={"value": "100", "label": "Test"}
         )
 
@@ -426,33 +426,33 @@ class TestValidateComponentProps:
     """Test suite for validate_component_props() function."""
 
     def test_validate_stat_card_props(self):
-        """Test validation of StatCard required props."""
+        """Test validation of statCard required props."""
         # Valid props
         assert validate_component_props(
-            "a2ui.StatCard",
+            "statCard",
             {"value": "100", "label": "Users", "trend": "up"}
         ) is True
 
         # Missing required prop
         with pytest.raises(ValueError) as exc_info:
-            validate_component_props("a2ui.StatCard", {"value": "100"})
+            validate_component_props("statCard", {"value": "100"})
 
         assert "missing required props" in str(exc_info.value)
         assert "label" in str(exc_info.value)
 
-    def test_validate_video_card_props(self):
-        """Test validation of VideoCard required props."""
+    def test_validate_code_block_props(self):
+        """Test validation of codeBlock required props."""
         # Valid props
         assert validate_component_props(
-            "a2ui.VideoCard",
-            {"videoId": "abc123", "platform": "youtube", "title": "Demo"}
+            "codeBlock",
+            {"code": "print('hello')", "language": "python"}
         ) is True
 
         # Missing required props
         with pytest.raises(ValueError) as exc_info:
-            validate_component_props("a2ui.VideoCard", {"title": "Demo"})
+            validate_component_props("codeBlock", {"language": "python"})
 
-        assert "videoId" in str(exc_info.value) or "platform" in str(exc_info.value)
+        assert "code" in str(exc_info.value)
 
     def test_validate_unknown_component_type(self):
         """Test validation of component type without required props defined."""
@@ -473,17 +473,17 @@ class TestGenerateComponentsBatch:
     def test_batch_generation(self):
         """Test generating multiple components in batch."""
         specs = [
-            ("a2ui.StatCard", {"value": "100", "label": "Users"}),
-            ("a2ui.StatCard", {"value": "50", "label": "Active"}),
+            ("statCard", {"value": "100", "label": "Users"}),
+            ("statCard", {"value": "50", "label": "Active"}),
             ("a2ui.VideoCard", {"videoId": "abc123", "platform": "youtube"}),
         ]
 
         components = generate_components_batch(specs)
 
         assert len(components) == 3
-        assert components[0].type == "a2ui.StatCard"
+        assert components[0].type == "statCard"
         assert components[0].id == "stat-card-1"
-        assert components[1].type == "a2ui.StatCard"
+        assert components[1].type == "statCard"
         assert components[1].id == "stat-card-2"
         assert components[2].type == "a2ui.VideoCard"
         assert components[2].id == "video-card-3"
@@ -494,14 +494,17 @@ class TestGenerateComponentsBatch:
         assert len(components) == 0
 
     def test_batch_generation_invalid_type(self):
-        """Test that batch generation raises error for invalid type."""
+        """Test that batch generation warns but still creates components for unknown types."""
         specs = [
-            ("a2ui.StatCard", {"value": "100", "label": "Users"}),
+            ("statCard", {"value": "100", "label": "Users"}),
             ("a2ui.InvalidType", {"value": "test"}),
         ]
 
-        with pytest.raises(ValueError):
-            generate_components_batch(specs)
+        # generate_component now warns instead of raising for unknown types
+        components = generate_components_batch(specs)
+        assert len(components) == 2
+        assert components[0].type == "statCard"
+        assert components[1].type == "a2ui.InvalidType"
 
 
 class TestComponentTypeRegistry:
@@ -509,19 +512,15 @@ class TestComponentTypeRegistry:
 
     def test_all_categories_present(self):
         """Test that all component categories are registered."""
-        # Check for presence of components from each category
+        # Check for presence of components from each category (canonical camelCase types)
         categories = {
-            "news": "a2ui.HeadlineCard",
-            "media": "a2ui.VideoCard",
-            "data": "a2ui.StatCard",
-            "lists": "a2ui.RankedItem",
-            "resources": "a2ui.LinkCard",
-            "people": "a2ui.ProfileCard",
-            "summary": "a2ui.TLDR",
-            "comparison": "a2ui.ComparisonTable",
-            "instructional": "a2ui.CodeBlock",
-            "layout": "a2ui.Section",
-            "tags": "a2ui.TagCloud",
+            "content": "headlineCard",
+            "data": "statCard",
+            "resources": "linkPreview",
+            "people": "profileCard",
+            "summary": "tldr",
+            "comparison": "comparisonTable",
+            "instructional": "codeBlock",
         }
 
         for category, component_type in categories.items():
@@ -529,8 +528,8 @@ class TestComponentTypeRegistry:
 
     def test_component_count(self):
         """Test that we have all expected component types."""
-        # Based on app_spec.txt, we should have 40+ components
-        assert len(VALID_COMPONENT_TYPES) >= 40
+        # Canonical set now has 15 types
+        assert len(VALID_COMPONENT_TYPES) == 15
 
 
 class TestIntegration:
@@ -545,11 +544,11 @@ class TestIntegration:
         """Test complete workflow from generation to emission."""
         # Step 1: Generate components
         components = [
-            generate_component("a2ui.TLDR", props={
+            generate_component("tldr", props={
                 "summary": "This is a test document",
                 "bulletPoints": ["Point 1", "Point 2"]
             }),
-            generate_component("a2ui.StatCard", props={
+            generate_component("statCard", props={
                 "value": "$196B",
                 "label": "Market Size",
                 "trend": "up"
@@ -576,14 +575,14 @@ class TestIntegration:
         # Parse first event
         json_str = events[0].replace("data: ", "").strip()
         data = json.loads(json_str)
-        assert data["type"] == "a2ui.TLDR"
+        assert data["type"] == "tldr"
         assert "bulletPoints" in data["props"]
 
     def test_component_id_uniqueness_across_types(self):
         """Test that IDs remain unique across different component types."""
         components = []
         for _ in range(10):
-            components.append(generate_component("a2ui.StatCard", props={"value": "1", "label": "Test"}))
+            components.append(generate_component("statCard", props={"value": "1", "label": "Test"}))
             components.append(generate_component("a2ui.VideoCard", props={"videoId": "123", "platform": "youtube"}))
             components.append(generate_component("a2ui.Section", props={"title": "Test"}))
 
@@ -608,7 +607,7 @@ class TestNewsGenerators:
         )
 
         assert isinstance(card, A2UIComponent)
-        assert card.type == "a2ui.HeadlineCard"
+        assert card.type == "headlineCard"
         assert card.props["title"] == "AI Breakthrough Announced"
         assert card.props["summary"] == "Major advancement in natural language processing"
         assert card.props["source"] == "Tech Daily"
@@ -661,7 +660,7 @@ class TestNewsGenerators:
         json_str = json.dumps(card_dict)
         parsed = json.loads(json_str)
 
-        assert parsed["type"] == "a2ui.HeadlineCard"
+        assert parsed["type"] == "headlineCard"
         assert parsed["props"]["title"] == "Test"
 
     def test_generate_trend_indicator_basic(self):
@@ -939,7 +938,7 @@ class TestNewsGeneratorsIntegration:
         ]
 
         # Verify all components generated correctly
-        assert headline.type == "a2ui.HeadlineCard"
+        assert headline.type == "headlineCard"
         assert all(e.type == "a2ui.TimelineEvent" for e in events)
         assert len(events) == 3
 
@@ -1015,7 +1014,7 @@ class TestNewsGeneratorsIntegration:
         # Parse and verify first event (HeadlineCard)
         json_str = events[0].replace("data: ", "").strip()
         data = json.loads(json_str)
-        assert data["type"] == "a2ui.HeadlineCard"
+        assert data["type"] == "headlineCard"
         assert data["props"]["title"] == "Test Article"
 
         # Parse and verify second event (TrendIndicator)
@@ -1709,7 +1708,7 @@ class TestDataGenerators:
         )
 
         assert isinstance(card, A2UIComponent)
-        assert card.type == "a2ui.StatCard"
+        assert card.type == "statCard"
         assert card.props["title"] == "Total Users"
         assert card.props["value"] == "1,234"
         assert card.props["changeType"] == "neutral"
@@ -1785,7 +1784,7 @@ class TestDataGenerators:
         json_str = json.dumps(card_dict)
         parsed = json.loads(json_str)
 
-        assert parsed["type"] == "a2ui.StatCard"
+        assert parsed["type"] == "statCard"
         assert parsed["props"]["highlight"] is True
 
     # MetricRow Tests
@@ -1798,7 +1797,7 @@ class TestDataGenerators:
         )
 
         assert isinstance(row, A2UIComponent)
-        assert row.type == "a2ui.MetricRow"
+        assert row.type == "metricRow"
         assert row.props["label"] == "CPU Usage"
         assert row.props["value"] == "45"
         assert "unit" not in row.props
@@ -1850,7 +1849,7 @@ class TestDataGenerators:
         json_str = json.dumps(card_dict)
         parsed = json.loads(json_str)
 
-        assert parsed["type"] == "a2ui.MetricRow"
+        assert parsed["type"] == "metricRow"
         assert parsed["props"]["status"] == "warning"
 
     # ProgressRing Tests
@@ -2119,7 +2118,7 @@ class TestDataGenerators:
         )
 
         assert isinstance(table, A2UIComponent)
-        assert table.type == "a2ui.DataTable"
+        assert table.type == "dataTable"
         assert table.props["headers"] == ["Name", "Age", "City"]
         assert len(table.props["rows"]) == 3
         assert table.props["rows"][0] == ["Alice", 28, "New York"]
@@ -2463,11 +2462,11 @@ class TestDataGeneratorsIntegration:
         # Verify all components created
         # Count: 3 StatCards + 3 MetricRows + 2 ProgressRings + 1 ComparisonBar + 1 DataTable + 2 MiniCharts = 12
         assert len(components) == 12
-        assert len([c for c in components if c.type == "a2ui.StatCard"]) == 3
-        assert len([c for c in components if c.type == "a2ui.MetricRow"]) == 3
+        assert len([c for c in components if c.type == "statCard"]) == 3
+        assert len([c for c in components if c.type == "metricRow"]) == 3
         assert len([c for c in components if c.type == "a2ui.ProgressRing"]) == 2
         assert len([c for c in components if c.type == "a2ui.ComparisonBar"]) == 1
-        assert len([c for c in components if c.type == "a2ui.DataTable"]) == 1
+        assert len([c for c in components if c.type == "dataTable"]) == 1
         assert len([c for c in components if c.type == "a2ui.MiniChart"]) == 2
 
         # Verify all IDs unique
@@ -2573,11 +2572,11 @@ class TestDataGeneratorsIntegration:
 
         # Parse and verify each component type
         for i, expected_type in enumerate([
-            "a2ui.StatCard",
-            "a2ui.MetricRow",
+            "statCard",
+            "metricRow",
             "a2ui.ProgressRing",
             "a2ui.ComparisonBar",
-            "a2ui.DataTable",
+            "dataTable",
             "a2ui.MiniChart"
         ]):
             json_str = events[i].replace("data: ", "").strip()
@@ -2637,11 +2636,11 @@ class TestDataGeneratorsIntegration:
         ))
 
         # Verify mixed types
-        assert components[0].type == "a2ui.HeadlineCard"
-        assert components[1].type == "a2ui.StatCard"
+        assert components[0].type == "headlineCard"
+        assert components[1].type == "statCard"
         assert components[3].type == "a2ui.MiniChart"
         assert components[4].type == "a2ui.ComparisonBar"
-        assert components[5].type == "a2ui.DataTable"
+        assert components[5].type == "dataTable"
 
 
 class TestRankedItemGenerator:
@@ -3025,8 +3024,8 @@ class TestBulletPointGenerator:
         reset_id_counter()
         bullet = generate_bullet_point(text="Main point")
 
-        assert bullet.type == "a2ui.BulletPoint"
-        assert bullet.id == "bullet-point-1"
+        assert bullet.type == "bulletList"
+        assert bullet.id == "bullet-list-1"
         assert bullet.props["text"] == "Main point"
         assert bullet.props["level"] == 0
         assert bullet.props["highlight"] is False
@@ -3136,7 +3135,7 @@ class TestBulletPointGenerator:
         json_str = json.dumps(bullet.model_dump(exclude_none=True))
         data = json.loads(json_str)
 
-        assert data["type"] == "a2ui.BulletPoint"
+        assert data["type"] == "bulletList"
         assert data["props"]["text"] == "Test bullet"
         assert data["props"]["level"] == 2
 
@@ -3362,7 +3361,7 @@ class TestListIntegration:
         assert json_data[0]["type"] == "a2ui.RankedItem"
         assert json_data[1]["type"] == "a2ui.ChecklistItem"
         assert json_data[2]["type"] == "a2ui.ProConItem"
-        assert json_data[3]["type"] == "a2ui.BulletPoint"
+        assert json_data[3]["type"] == "bulletList"
 
 
 class TestResourceGenerators:
@@ -3437,7 +3436,7 @@ class TestResourceGenerators:
             url="https://react.dev/learn"
         )
 
-        assert card.type == "a2ui.LinkCard"
+        assert card.type == "linkPreview"
         assert card.props["title"] == "React Documentation"
         assert card.props["url"] == "https://react.dev/learn"
         assert card.props["domain"] == "react.dev"
@@ -3454,7 +3453,7 @@ class TestResourceGenerators:
             tags=["machine-learning", "tutorial", "beginner"]
         )
 
-        assert card.type == "a2ui.LinkCard"
+        assert card.type == "linkPreview"
         assert card.props["title"] == "Introduction to Machine Learning"
         assert card.props["url"] == "https://example.com/ml-intro"
         assert card.props["description"] == "Comprehensive guide to ML fundamentals"
@@ -3763,7 +3762,7 @@ class TestResourceGenerators:
 
         # Verify all components created correctly
         assert len(resources) == 4
-        assert resources[0].type == "a2ui.LinkCard"
+        assert resources[0].type == "linkPreview"
         assert resources[1].type == "a2ui.ToolCard"
         assert resources[2].type == "a2ui.BookCard"
         assert resources[3].type == "a2ui.RepoCard"
@@ -3788,7 +3787,7 @@ class TestResourceGenerators:
         repo_json = json.loads(json.dumps(repo.model_dump(exclude_none=True)))
 
         # Verify types in JSON
-        assert link_json["type"] == "a2ui.LinkCard"
+        assert link_json["type"] == "linkPreview"
         assert tool_json["type"] == "a2ui.ToolCard"
         assert book_json["type"] == "a2ui.BookCard"
         assert repo_json["type"] == "a2ui.RepoCard"
@@ -3888,7 +3887,7 @@ class TestResourceGenerators:
         assert len(tech_stack) == 5
         assert sum(1 for r in tech_stack if r.type == "a2ui.ToolCard") == 2
         assert sum(1 for r in tech_stack if r.type == "a2ui.RepoCard") == 1
-        assert sum(1 for r in tech_stack if r.type == "a2ui.LinkCard") == 1
+        assert sum(1 for r in tech_stack if r.type == "linkPreview") == 1
         assert sum(1 for r in tech_stack if r.type == "a2ui.BookCard") == 1
 
     def test_resource_batch_generation(self):
@@ -3933,7 +3932,7 @@ class TestPeopleComponentGenerators:
             title="AI Researcher"
         )
 
-        assert card.type == "a2ui.ProfileCard"
+        assert card.type == "profileCard"
         assert card.id == "profile-card-1"
         assert card.props["name"] == "Jane Smith"
         assert card.props["title"] == "AI Researcher"
@@ -3953,7 +3952,7 @@ class TestPeopleComponentGenerators:
             avatar_url="https://example.com/avatar.jpg"
         )
 
-        assert card.type == "a2ui.ProfileCard"
+        assert card.type == "profileCard"
         assert card.props["name"] == "Dr. John Doe"
         assert card.props["title"] == "Chief Technology Officer"
         assert card.props["bio"] == "20+ years building scalable systems"
@@ -3973,7 +3972,7 @@ class TestPeopleComponentGenerators:
             }
         )
 
-        assert card.type == "a2ui.ProfileCard"
+        assert card.type == "profileCard"
         assert card.props["contact"]["email"] == "alice@example.com"
         assert card.props["contact"]["phone"] == "+1-555-0100"
         assert card.props["contact"]["location"] == "San Francisco, CA"
@@ -3994,7 +3993,7 @@ class TestPeopleComponentGenerators:
             social_links=social_links
         )
 
-        assert card.type == "a2ui.ProfileCard"
+        assert card.type == "profileCard"
         assert len(card.props["socialLinks"]) == 3
         assert card.props["socialLinks"][0]["platform"] == "twitter"
         assert card.props["socialLinks"][0]["url"] == "https://twitter.com/johndoe"
@@ -4022,7 +4021,7 @@ class TestPeopleComponentGenerators:
             ]
         )
 
-        assert card.type == "a2ui.ProfileCard"
+        assert card.type == "profileCard"
         assert card.props["name"] == "Dr. Sarah Chen"
         assert card.props["title"] == "Machine Learning Researcher"
         assert "bio" in card.props
@@ -4201,12 +4200,12 @@ class TestPeopleComponentGenerators:
             author="Alan Kay"
         )
 
-        assert card.type == "a2ui.QuoteCard"
+        assert card.type == "quoteCard"
         assert card.id == "quote-card-1"
-        assert card.props["text"] == "The best way to predict the future is to invent it."
+        assert card.props["quote"] == "The best way to predict the future is to invent it."
         assert card.props["author"] == "Alan Kay"
         assert card.props["highlight"] == False
-        assert "source" not in card.props
+        assert "context" not in card.props
 
     def test_generate_quote_card_with_source(self):
         """Test generating a quote card with source."""
@@ -4218,10 +4217,10 @@ class TestPeopleComponentGenerators:
             source="Stanford Commencement Speech, 2005"
         )
 
-        assert card.type == "a2ui.QuoteCard"
-        assert card.props["text"] == "Stay hungry, stay foolish."
+        assert card.type == "quoteCard"
+        assert card.props["quote"] == "Stay hungry, stay foolish."
         assert card.props["author"] == "Steve Jobs"
-        assert card.props["source"] == "Stanford Commencement Speech, 2005"
+        assert card.props["context"] == "Stanford Commencement Speech, 2005"
 
     def test_generate_quote_card_highlighted(self):
         """Test generating a highlighted quote card."""
@@ -4233,7 +4232,7 @@ class TestPeopleComponentGenerators:
             highlight=True
         )
 
-        assert card.type == "a2ui.QuoteCard"
+        assert card.type == "quoteCard"
         assert card.props["highlight"] == True
 
     def test_generate_quote_card_long_quote(self):
@@ -4247,8 +4246,8 @@ class TestPeopleComponentGenerators:
             author="Test Author"
         )
 
-        assert card.type == "a2ui.QuoteCard"
-        assert len(card.props["text"]) == 400
+        assert card.type == "quoteCard"
+        assert len(card.props["quote"]) == 400
 
     def test_generate_quote_card_empty_text(self):
         """Test that empty text raises error."""
@@ -4422,7 +4421,7 @@ class TestPeopleComponentGenerators:
 
         # Verify team structure
         assert len(team) == 3
-        assert all(p.type == "a2ui.ProfileCard" for p in team)
+        assert all(p.type == "profileCard" for p in team)
         assert team[0].props["name"] == "Alice Chen"
         assert team[1].props["name"] == "Bob Martinez"
         assert team[2].props["name"] == "Carol Kim"
@@ -4454,11 +4453,11 @@ class TestPeopleComponentGenerators:
 
         # Verify testimonials
         assert len(testimonials) == 3
-        assert all(q.type == "a2ui.QuoteCard" for q in testimonials)
+        assert all(q.type == "quoteCard" for q in testimonials)
         assert testimonials[0].props["highlight"] == True
         assert testimonials[1].props["highlight"] == False
         assert all("author" in q.props for q in testimonials)
-        assert all("source" in q.props for q in testimonials)
+        assert all("context" in q.props for q in testimonials)
 
     def test_people_integration_company_directory(self):
         """Test integration: generating a company directory."""
@@ -4571,8 +4570,8 @@ class TestPeopleComponentGenerators:
 
         # Verify mixed content
         assert len(content) == 4
-        assert content[0].type == "a2ui.ProfileCard"
-        assert content[1].type == "a2ui.QuoteCard"
+        assert content[0].type == "profileCard"
+        assert content[1].type == "quoteCard"
         assert content[2].type == "a2ui.ExpertTip"
         assert content[3].type == "a2ui.CompanyCard"
 
@@ -4600,8 +4599,8 @@ class TestPeopleComponentGenerators:
         # Verify batch creation
         assert len(profiles) == 5
         assert len(quotes) == 3
-        assert all(p.type == "a2ui.ProfileCard" for p in profiles)
-        assert all(q.type == "a2ui.QuoteCard" for q in quotes)
+        assert all(p.type == "profileCard" for p in profiles)
+        assert all(q.type == "quoteCard" for q in quotes)
 
         # Verify sequential IDs
         profile_ids = [p.id for p in profiles]
@@ -4625,8 +4624,8 @@ class TestTLDRGenerator:
 
         tldr = generate_tldr("AI market expected to reach $196B by 2030.")
 
-        assert tldr.type == "a2ui.TLDR"
-        assert tldr.id == "t-l-d-r-1"
+        assert tldr.type == "tldr"
+        assert tldr.id == "tldr-1"
         assert tldr.props["content"] == "AI market expected to reach $196B by 2030."
         assert tldr.props["maxLength"] == 200
 
@@ -4697,7 +4696,7 @@ class TestKeyTakeawaysGenerator:
 
         takeaways = generate_key_takeaways(items)
 
-        assert takeaways.type == "a2ui.KeyTakeaways"
+        assert takeaways.type == "keyTakeaways"
         assert takeaways.id == "key-takeaways-1"
         assert takeaways.props["items"] == items
         assert "category" not in takeaways.props
@@ -5121,13 +5120,13 @@ class TestSummaryIntegration:
         assert len(components) == 4
 
         # Verify types
-        assert components[0].type == "a2ui.TLDR"
-        assert components[1].type == "a2ui.KeyTakeaways"
+        assert components[0].type == "tldr"
+        assert components[1].type == "keyTakeaways"
         assert components[2].type == "a2ui.ExecutiveSummary"
         assert components[3].type == "a2ui.TableOfContents"
 
         # Verify IDs are sequential
-        assert components[0].id == "t-l-d-r-1"
+        assert components[0].id == "tldr-1"
         assert components[1].id == "key-takeaways-2"
         assert components[2].id == "executive-summary-3"
         assert components[3].id == "table-of-contents-4"
@@ -5200,8 +5199,8 @@ class TestSummaryIntegration:
         # Verify batch creation
         assert len(tldrs) == 3
         assert len(takeaways_list) == 2
-        assert all(t.type == "a2ui.TLDR" for t in tldrs)
-        assert all(k.type == "a2ui.KeyTakeaways" for k in takeaways_list)
+        assert all(t.type == "tldr" for t in tldrs)
+        assert all(k.type == "keyTakeaways" for k in takeaways_list)
 
     def test_summary_integration_mixed_categories(self):
         """Test key takeaways with different categories."""
@@ -5383,7 +5382,7 @@ class TestStepCardGenerator:
             description="Run npm install to install packages"
         )
 
-        assert step.type == "a2ui.StepCard"
+        assert step.type == "stepCard"
         assert step.props["stepNumber"] == 1
         assert step.props["title"] == "Install Dependencies"
         assert step.props["description"] == "Run npm install to install packages"
@@ -5402,7 +5401,7 @@ class TestStepCardGenerator:
             action="View example .env file"
         )
 
-        assert step.type == "a2ui.StepCard"
+        assert step.type == "stepCard"
         assert step.props["stepNumber"] == 2
         assert step.props["title"] == "Configure Environment"
         assert step.props["description"] == "Set up your environment variables"
@@ -5493,7 +5492,7 @@ class TestCodeBlockGenerator:
             code="print('Hello, world!')"
         )
 
-        assert code.type == "a2ui.CodeBlock"
+        assert code.type == "codeBlock"
         assert code.props["code"] == "print('Hello, world!')"
         assert code.props["language"] == "python"  # Auto-detected
         assert code.props["copyButton"] is True
@@ -5650,7 +5649,7 @@ class TestCalloutCardGenerator:
             content="Follow the steps below to set up your project"
         )
 
-        assert callout.type == "a2ui.CalloutCard"
+        assert callout.type == "calloutCard"
         assert callout.props["type"] == "info"
         assert callout.props["title"] == "Getting Started"
         assert callout.props["content"] == "Follow the steps below to set up your project"
@@ -5963,10 +5962,10 @@ class TestInstructionalIntegration:
         )
 
         # Verify all components
-        assert intro.type == "a2ui.CalloutCard"
+        assert intro.type == "calloutCard"
         assert intro.props["type"] == "info"
 
-        assert step1.type == "a2ui.StepCard"
+        assert step1.type == "stepCard"
         assert step1.props["stepNumber"] == 1
 
         assert cmd1.type == "a2ui.CommandCard"
@@ -5976,7 +5975,7 @@ class TestInstructionalIntegration:
         assert cmd2.props["command"] == "npm install"
 
         assert step3.props["stepNumber"] == 3
-        assert env_code.type == "a2ui.CodeBlock"
+        assert env_code.type == "codeBlock"
         assert env_code.props["filename"] == ".env"
 
         assert warning.props["type"] == "warning"
@@ -6094,7 +6093,7 @@ class TestComparisonTableGenerator:
             ]
         )
 
-        assert table.type == "a2ui.ComparisonTable"
+        assert table.type == "comparisonTable"
         assert table.id == "comparison-table-1"
         assert table.props["headers"] == ["Feature", "Product A", "Product B"]
         assert len(table.props["rows"]) == 2
@@ -6202,10 +6201,10 @@ class TestVsCardGenerator:
             item_b={"name": "Vue", "description": "Progressive JavaScript framework"}
         )
 
-        assert card.type == "a2ui.VsCard"
+        assert card.type == "vsCard"
         assert card.id == "vs-card-1"
-        assert card.props["itemA"]["name"] == "React"
-        assert card.props["itemB"]["name"] == "Vue"
+        assert card.props["item_a"]["name"] == "React"
+        assert card.props["item_b"]["name"] == "Vue"
         assert "winner" not in card.props
 
     def test_vs_card_with_winner_a(self):
@@ -6218,7 +6217,7 @@ class TestVsCardGenerator:
             winner="a"
         )
 
-        assert card.props["winner"] == "a"
+        assert card.props["winner"] == "left"
 
     def test_vs_card_with_winner_b(self):
         """Test vs card with item B as winner."""
@@ -6230,7 +6229,7 @@ class TestVsCardGenerator:
             winner="b"
         )
 
-        assert card.props["winner"] == "b"
+        assert card.props["winner"] == "right"
 
     def test_vs_card_missing_item_a_name(self):
         """Test that vs card fails if item_a missing name."""
@@ -6568,7 +6567,7 @@ class TestComparisonIntegration:
             highlighted_column=3  # Highlight Google Pixel 8
         )
 
-        assert table.type == "a2ui.ComparisonTable"
+        assert table.type == "comparisonTable"
         assert len(table.props["rows"]) == 4
         assert table.props["highlightedColumn"] == 3
 
@@ -6677,12 +6676,12 @@ class TestComparisonIntegration:
         )
 
         # Verify vs card
-        assert vs_card.type == "a2ui.VsCard"
-        assert vs_card.props["winner"] == "a"
-        assert vs_card.props["itemA"]["name"] == "React"
+        assert vs_card.type == "vsCard"
+        assert vs_card.props["winner"] == "left"
+        assert vs_card.props["item_a"]["name"] == "React"
 
         # Verify comparison table
-        assert table.type == "a2ui.ComparisonTable"
+        assert table.type == "comparisonTable"
         assert len(table.props["rows"]) == 5
         assert table.props["highlightedColumn"] == 1
 

@@ -131,7 +131,15 @@ export const a2uiCatalog: Record<string, ComponentRenderer> = {
 
   "a2ui.Accordion": (props: any) => <Accordion {...props} />,
 
-  "a2ui.Carousel": (props: any) => <Carousel {...props} />,
+  // Carousel: children (A2UIComponent[]) are used as slides when present (backend-compatible),
+  // falls back to props.items (string[]) for simple text slides.
+  "a2ui.Carousel": (props: any, children?: React.ReactNode) => (
+    <Carousel
+      {...props}
+      items={children ? React.Children.toArray(children) : (props.items ?? [])}
+    />
+  ),
+
 
   "a2ui.Sidebar": (props: any) => <Sidebar {...props} />,
 
@@ -202,17 +210,41 @@ export const a2uiCatalog: Record<string, ComponentRenderer> = {
 };
 
 /**
- * Get component renderer from catalog
+ * Maps new camelCase backend types to existing a2ui.* catalog keys.
+ * This allows the frontend renderer to work with both the new sync endpoint
+ * (which returns camelCase types) and the existing SSE endpoint (a2ui.* types).
+ */
+const backendTypeToA2UI: Record<string, string> = {
+  "statCard": "a2ui.StatCard",
+  "headlineCard": "a2ui.HeadlineCard",
+  "calloutCard": "a2ui.CalloutCard",
+  "keyTakeaways": "a2ui.KeyTakeaways",
+  "dataTable": "a2ui.DataTable",
+  "comparisonTable": "a2ui.ComparisonTable",
+  "quoteCard": "a2ui.QuoteCard",
+  "stepCard": "a2ui.StepCard",
+  "tldr": "a2ui.TLDR",
+  "vsCard": "a2ui.VsCard",
+  "codeBlock": "a2ui.CodeBlock",
+  "profileCard": "a2ui.ProfileCard",
+  "bulletList": "a2ui.BulletPoint",
+  "metricRow": "a2ui.MetricRow",
+  "linkPreview": "a2ui.LinkCard",
+};
+
+/**
+ * Get component renderer from catalog.
+ * Resolves both legacy a2ui.* types and new camelCase types from the backend.
  */
 export function getComponentRenderer(type: string): ComponentRenderer | undefined {
-  return a2uiCatalog[type];
+  return a2uiCatalog[type] || a2uiCatalog[backendTypeToA2UI[type]];
 }
 
 /**
  * Check if component type is registered
  */
 export function isComponentRegistered(type: string): boolean {
-  return type in a2uiCatalog;
+  return type in a2uiCatalog || type in backendTypeToA2UI;
 }
 
 /**

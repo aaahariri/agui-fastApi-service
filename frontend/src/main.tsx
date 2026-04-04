@@ -13,6 +13,10 @@ import DataComponentsTest from './pages/DataComponentsTest.tsx'
 import ResourceTest from './pages/ResourceTest.tsx'
 import A2UIValidatorTest from './pages/A2UIValidatorTest.tsx'
 import ComponentShowcase from './pages/ComponentShowcase.tsx'
+import ComponentShowcasePage from './pages/ComponentShowcasePage.tsx'
+
+// Path-based routing
+const IS_SHOWCASE_PAGE = window.location.pathname === '/showcase-components';
 
 // Use test pages based on query params (check specific tests first to avoid conflicts)
 const USE_SHOWCASE = window.location.search.includes('showcase');
@@ -39,6 +43,7 @@ const dashboardAgent = new HttpAgent({
 
 // Determine which component to render
 function getAppComponent() {
+  if (IS_SHOWCASE_PAGE) return <ComponentShowcasePage />;
   if (USE_SHOWCASE) return <ComponentShowcase />;
   if (USE_VALIDATOR_TEST_PAGE) return <A2UIValidatorTest />;
   if (USE_RESOURCE_TEST_PAGE) return <ResourceTest />;

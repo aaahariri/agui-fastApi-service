@@ -27,9 +27,18 @@ cd frontend && npm install && npm run dev
 | File | Variable | Description |
 |------|----------|-------------|
 | `agent/.env` | `OPENROUTER_API_KEY` | LLM gateway API key |
+| `agent/.env` | `API_KEY` | API key for endpoint auth. Consumers send `Authorization: Bearer <key>`. Empty = no auth (local dev). |
+| `agent/.env` | `ALLOWED_ORIGINS` | Comma-separated allowed CORS origins. Defaults to localhost dev ports if unset. |
 | `frontend/.env` | `VITE_BACKEND_URL` | Backend URL (e.g. `http://localhost:8000`) |
 
 ---
+
+## Key Files
+
+- **Component types (backend)**: `agent/a2ui_generator.py` — `VALID_COMPONENT_TYPES` (line ~175) defines the canonical set; `generate_component` (line ~261) includes a legacy `a2ui.PascalCase` → camelCase map.
+- **Component renderers (frontend)**: `frontend/src/lib/a2ui-catalog.tsx` — React components keyed by type.
+- **Endpoints**: `agent/main.py` — `POST /` (AG-UI streaming), `POST /api/generate` (sync JSON), `GET /info`, `GET /health`.
+- **LLM prompts**: `agent/prompts.py` — all prompt text lives here exclusively.
 
 ## Key Conventions
 

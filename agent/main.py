@@ -23,6 +23,16 @@ from pydantic_ai.ag_ui import StateDeps
 
 # Configuration
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
+API_KEY = os.getenv("API_KEY", "")
+
+
+def verify_api_key(request: Request) -> JSONResponse | None:
+    """Return a 401 response if API_KEY is set and the request doesn't match. None if OK."""
+    if not API_KEY:
+        return None  # No key configured — skip auth (local dev)
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if token != API_KEY:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
 
 def pascal_to_screaming_snake(name: str) -> str:
@@ -130,6 +140,8 @@ async def ag_ui_endpoint(request: Request):
     AG-UI endpoint that wraps Pydantic AI's implementation
     and transforms event types to SCREAMING_SNAKE_CASE format.
     """
+    if err := verify_api_key(request):
+        return err
     try:
         # Log incoming request
         body = await request.body()
@@ -172,9 +184,49 @@ async def ag_ui_endpoint(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# Synchronous JSON endpoint — same pipeline, no streaming
+async def sync_generate_endpoint(request: Request):
+    """
+    Run the full dashboard generation pipeline and return the final
+    DashboardState as a single JSON response (no SSE streaming).
+    """
+    if err := verify_api_key(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    markdown_content = body.get("markdown_content", "").strip()
+    if not markdown_content:
+        return JSONResponse(
+            {"error": "markdown_content is required and must be non-empty"},
+            status_code=400,
+        )
+
+    state = DashboardState(markdown_content=markdown_content)
+    deps = StateDeps(state)
+
+    try:
+        prompt = (
+            "Please analyze this markdown document and generate a dashboard for it:\n\n"
+            + markdown_content
+        )
+        await agent.run(prompt, deps=deps)
+    except Exception as e:
+        print(f"[SYNC ERROR] {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    return JSONResponse(state.model_dump())
+
+
 # Info endpoint for debugging / CopilotKit compatibility
 async def info_endpoint(request: Request):
     """Return agent information."""
+    if err := verify_api_key(request):
+        return err
     return JSONResponse({
         "name": "Second Brain Dashboard Agent",
         "version": "1.0.0",
@@ -195,11 +247,14 @@ async def health_endpoint(request: Request):
 # GET handler for root to help with debugging/discovery
 async def root_get_endpoint(request: Request):
     """Return AG-UI endpoint info for GET requests."""
+    if err := verify_api_key(request):
+        return err
     return JSONResponse({
         "protocol": "ag-ui",
         "version": "1.0.0",
         "endpoints": {
             "run_agent": "POST /",
+            "generate_sync": "POST /api/generate",
             "info": "GET /info",
             "health": "GET /health",
         },
@@ -217,16 +272,25 @@ async def root_handler(request: Request):
 
 # Add routes to the app
 app.routes.append(Route("/", root_handler, methods=["GET", "POST"]))
+app.routes.append(Route("/api/generate", sync_generate_endpoint, methods=["POST"]))
 app.routes.append(Route("/info", info_endpoint, methods=["GET"]))
 app.routes.append(Route("/health", health_endpoint, methods=["GET"]))
 
 
-# Add CORS middleware for development
+# CORS — restrict origins via ALLOWED_ORIGINS env var (comma-separated)
+# Falls back to permissive "*" for local development only
 from starlette.middleware.cors import CORSMiddleware
+
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _raw_origins.split(",") if o.strip()]
+    if _raw_origins
+    else ["http://localhost:3010", "http://localhost:5173", "http://127.0.0.1:3010", "http://127.0.0.1:5173"]
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -238,6 +302,7 @@ async def startup():
     """Startup event handler."""
     print(f"[*] Second Brain Agent (AG-UI) starting on port {BACKEND_PORT}")
     print(f"[*] AG-UI endpoint: POST http://localhost:{BACKEND_PORT}/")
+    print(f"[*] Sync endpoint: POST http://localhost:{BACKEND_PORT}/api/generate")
     print(f"[*] Info endpoint: GET http://localhost:{BACKEND_PORT}/info")
     print(f"[*] Health endpoint: GET http://localhost:{BACKEND_PORT}/health")
 

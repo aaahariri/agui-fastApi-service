@@ -226,7 +226,7 @@ Return a structured layout selection with:
   "confidence": 0.92,
   "reasoning": "Document contains 8 code blocks with Python examples, numbered steps (1-6), and clear instructional language. The structure follows a tutorial format with prerequisites, setup, and hands-on exercises. Users will benefit from an instructional layout with collapsible code sections and progress tracking.",
   "alternative_layouts": ["reference_layout", "list_layout"],
-  "component_priorities": ["CodeBlock", "StepCard", "CalloutCard", "CommandCard", "TableOfContents"]
+  "component_priorities": ["codeBlock", "stepCard", "calloutCard", "keyTakeaways", "statCard"]
 }}
 ```
 
@@ -257,82 +257,41 @@ Your task is to select and configure the OPTIMAL set of A2UI components to repre
 
 {layout_decision}
 
-## Available A2UI Component Types
+## Available Component Types
 
-### News & Trends Components
-- **HeadlineCard**: Breaking news, important announcements, featured content
-- **TrendIndicator**: Trends, metrics with direction (up/down/stable)
-- **TimelineEvent**: Chronological events, version history, milestones
-- **NewsTicker**: Live updates, rolling news, status messages
-
-### Media Components
-- **VideoCard**: YouTube, Vimeo, or video platform embeds
-- **ImageCard**: Featured images, diagrams, screenshots
-- **PlaylistCard**: Video/audio playlists, course modules
-- **PodcastCard**: Podcast episodes, audio content
+### Summary Components
+- **tldr**: Too Long; Didn't Read summaries
+- **keyTakeaways**: Main points, key learnings (3-5 items)
 
 ### Data & Statistics Components
-- **StatCard**: Key metrics, KPIs, important numbers
-- **MetricRow**: Multiple related metrics in a row
-- **ProgressRing**: Circular progress indicators, completion percentages
-- **ComparisonBar**: Side-by-side metric comparisons
-- **DataTable**: Structured tabular data with headers
-- **MiniChart**: Small inline charts (sparklines)
+- **statCard**: Key metrics, KPIs, important numbers
+- **metricRow**: Multiple related metrics in a row
+- **dataTable**: Structured tabular data with headers
 
-### List & Navigation Components
-- **RankedItem**: Numbered lists, top N items, rankings
-- **ChecklistItem**: To-do items, action items, steps
-- **ProConItem**: Pros/cons lists, advantages/disadvantages
-- **BulletPoint**: Simple bulleted list items
+### Content Components
+- **headlineCard**: Breaking news, important announcements, featured content
+- **calloutCard**: Important notes, warnings, tips, info boxes
+- **quoteCard**: Quotes, testimonials, feedback
+- **bulletList**: Bulleted list items
+- **codeBlock**: Code examples with syntax highlighting
+- **stepCard**: Numbered tutorial steps with descriptions
 
-### Resource & Link Components
-- **LinkCard**: External links, references, resources
-- **ToolCard**: Software tools, applications, utilities
-- **BookCard**: Books, papers, reading materials
-- **RepoCard**: GitHub repositories, code projects
+### Comparison Components
+- **comparisonTable**: Feature comparison across products/options
+- **vsCard**: Head-to-head comparisons (A vs B)
+
+### Resource & People Components
+- **linkPreview**: External links, references, resources
+- **profileCard**: Author profiles, contributors, experts
 
 ### URL Requirements (CRITICAL)
-For any component with a URL (LinkCard, ToolCard, RepoCard, BookCard):
+For any component with a URL (linkPreview):
 - **ONLY use complete, absolute URLs** starting with `https://`
 - **NEVER use relative paths** like `/docs`, `./api`, or `#section`
 - **NEVER use localhost URLs**
 - If you cannot find a valid external URL for a resource, DO NOT create the component
 - Example valid: `https://github.com/facebook/react`
 - Example invalid: `/docs/intro`, `localhost:3000/api`, `#getting-started`
-
-### People & Social Components
-- **ProfileCard**: Author profiles, contributors, experts
-- **CompanyCard**: Companies, organizations, brands
-- **QuoteCard**: Quotes, testimonials, feedback
-- **ExpertTip**: Tips, advice, best practices from experts
-
-### Summary Components
-- **TLDR**: Too Long; Didn't Read summaries
-- **KeyTakeaways**: Main points, key learnings (3-5 items)
-- **ExecutiveSummary**: High-level overview for decision makers
-- **TableOfContents**: Navigation for long documents
-
-### Instructional Components
-- **StepCard**: Numbered tutorial steps with descriptions
-- **CodeBlock**: Code examples with syntax highlighting
-- **CalloutCard**: Important notes, warnings, tips, info boxes
-- **CommandCard**: Terminal commands, CLI instructions
-
-### Comparison Components
-- **ComparisonTable**: Feature comparison across products/options
-- **VsCard**: Head-to-head comparisons (A vs B)
-- **FeatureMatrix**: Feature availability across tiers/versions
-- **PricingTable**: Pricing tiers, subscription plans
-
-### Layout Components
-- **Section**: Group related components with optional title (use sparingly for major content groups)
-
-### Tagging Components
-- **TagCloud**: Collection of related tags with optional counts and sizing
-- **CategoryBadge**: Category label with optional icon and color
-- **StatusIndicator**: Status with colored dot indicator (active, inactive, pending, error)
-- **PriorityBadge**: Priority level badge (low, medium, high, critical)
-- **DifficultyBadge**: Difficulty level badge (beginner, intermediate, advanced, expert)
 
 ## COMPREHENSIVE COVERAGE RULES (CRITICAL)
 
@@ -341,8 +300,7 @@ You MUST follow these rules to ensure thorough content representation:
 ### Rule 1: Cover ALL Major Content Sections
 - **Generate a component for EVERY major section/topic in the document**
 - If document has 10 sections/topics, generate components for ALL 10, not just 2-3
-- Bullet points WITHIN a section should be collapsed into a SINGLE component (KeyTakeaways, CalloutCard, or ChecklistItem) — do NOT create one RankedItem per bullet point
-- Only use RankedItem for content that is explicitly ranked/ordered (e.g., "Top 10 tools")
+- Bullet points WITHIN a section should be collapsed into a SINGLE component (keyTakeaways, calloutCard, or bulletList) — do NOT create one component per bullet point
 - Minimum: Generate 1-2 components per major section + summary components
 
 ### Rule 2: Scale With Document Size
@@ -378,13 +336,11 @@ Group similar-width components together when possible.
 
 ### Rule 7: Semantic Zones (IMPORTANT)
 Assign each component to a semantic zone for intelligent layout:
-- **"hero"**: Top of page, full-width prominent content. Use for: TLDR, ExecutiveSummary, main headline
-- **"metrics"**: Key statistics and data. Use for: StatCard, TrendIndicator, MetricRow, ProgressRing
-- **"insights"**: Main content area. Use for: KeyTakeaways, CalloutCard, QuoteCard, ExpertTip, RankedItem
-- **"content"**: Primary detailed content. Use for: CodeBlock, DataTable, StepCard, ChecklistItem, ProConItem
-- **"media"**: Videos, images, embeds. Use for: VideoCard, ImageCard, PlaylistCard, PodcastCard
-- **"resources"**: Links and references. Use for: LinkCard, ToolCard, BookCard, RepoCard
-- **"tags"**: Categories and labels. Use for: TagCloud, CategoryBadge, StatusIndicator
+- **"hero"**: Top of page, full-width prominent content. Use for: tldr, headlineCard
+- **"metrics"**: Key statistics and data. Use for: statCard, metricRow
+- **"insights"**: Main content area. Use for: keyTakeaways, calloutCard, quoteCard
+- **"content"**: Primary detailed content. Use for: codeBlock, dataTable, stepCard, bulletList, comparisonTable, vsCard
+- **"resources"**: Links and references. Use for: linkPreview, profileCard
 
 Components in the same zone will be grouped together visually. Use zones to create a clear visual hierarchy.
 
@@ -398,28 +354,26 @@ Follow this process:
 - What's the primary user goal? (learn, reference, consume)
 
 ### Step 2: Map Content to Components
-- Code blocks → CodeBlock
-- Statistics/metrics → StatCard, MetricRow, ComparisonBar
-- Links → LinkCard, ToolCard, RepoCard, BookCard
-- Steps/procedures → StepCard, ChecklistItem
-- Media → VideoCard, ImageCard
-- Summaries → TLDR, KeyTakeaways, ExecutiveSummary
+- Code blocks → codeBlock
+- Statistics/metrics → statCard, metricRow
+- Links → linkPreview
+- Steps/procedures → stepCard
+- Summaries → tldr, keyTakeaways
 
 ### Step 2b: Content Pattern Matching (IMPORTANT)
 Match these content patterns to the BEST component type:
-- Direct quotes with attribution → **QuoteCard** (NOT RankedItem or BulletPoint)
-- News stories with dates/sources → **HeadlineCard** (with appropriate sentiment: positive/negative/neutral)
-- Statistics with numbers/percentages → **StatCard** or **TrendIndicator**
-- Chronological events, upcoming dates, or timelines → **TimelineEvent**
-- Named people with roles/titles → **ProfileCard**
-- Lists of resources/tools with URLs → **ToolCard** or **LinkCard**
-- Pro/con or advantage/disadvantage content → **ProConItem**
-- Step-by-step instructions → **StepCard**
-- Grouped short items (funding rounds, product launches) → **CalloutCard** with grouped content
-- Expert tips or advice → **ExpertTip**
-- Key statistics in a group → **MetricRow** for related metrics together
+- Direct quotes with attribution → **quoteCard**
+- News stories with dates/sources → **headlineCard** (with appropriate sentiment: positive/negative/neutral)
+- Statistics with numbers/percentages → **statCard**
+- Named people with roles/titles → **profileCard**
+- Lists of resources/tools with URLs → **linkPreview**
+- Step-by-step instructions → **stepCard**
+- Grouped short items (funding rounds, product launches) → **calloutCard** with grouped content
+- Key statistics in a group → **metricRow** for related metrics together
+- Feature comparisons → **comparisonTable** or **vsCard**
+- Bulleted lists → **bulletList**
 
-### Sentiment Guidelines for HeadlineCards
+### Sentiment Guidelines for headlineCards
 Assign accurate sentiment:
 - **positive**: achievements, breakthroughs, funding, launches, growth, improvements, open-source releases
 - **negative**: failures, layoffs, bans, restrictions, losses, declines, security breaches
@@ -429,13 +383,6 @@ Do NOT default everything to "neutral" - analyze the actual tone of the content.
 ### Step 3: Enforce Variety
 - Check component type counts
 - Insert different component types to break up repetition
-- Add complementary components (e.g., TableOfContents for long content)
-
-### Step 4: Organize with Layout Components
-- Group related components in Sections
-- Use Grid for card-based content
-- Use Accordion for lengthy collapsible content
-- Use Tabs for categorized information
 
 ## Output Format
 
@@ -445,7 +392,7 @@ Return a JSON array of component specifications:
 {{
   "components": [
     {{
-      "component_type": "TLDR",
+      "component_type": "tldr",
       "priority": "high",
       "zone": "hero",
       "data_source": "summary of first 2-3 paragraphs",
@@ -457,7 +404,7 @@ Return a JSON array of component specifications:
       "rationale": "Provides quick overview at document start"
     }},
     {{
-      "component_type": "StatCard",
+      "component_type": "statCard",
       "priority": "high",
       "zone": "metrics",
       "data_source": "extract number from 'Market size: $196B' mention",
@@ -471,7 +418,7 @@ Return a JSON array of component specifications:
       "rationale": "Highlights key market metric"
     }},
     {{
-      "component_type": "StatCard",
+      "component_type": "statCard",
       "priority": "high",
       "zone": "metrics",
       "props": {{
@@ -484,7 +431,7 @@ Return a JSON array of component specifications:
       "rationale": "Shows growth alongside market size"
     }},
     {{
-      "component_type": "KeyTakeaways",
+      "component_type": "keyTakeaways",
       "priority": "high",
       "zone": "insights",
       "props": {{
@@ -507,16 +454,16 @@ Return a JSON array of component specifications:
 ```json
 {{
   "components": [
-    {{"component_type": "TLDR", "zone": "hero", "priority": "high", "props": {{"width_hint": "full"}}}},
-    {{"component_type": "StatCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
-    {{"component_type": "StatCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
-    {{"component_type": "TrendIndicator", "zone": "metrics", "priority": "medium", "props": {{"width_hint": "third"}}}},
-    {{"component_type": "KeyTakeaways", "zone": "insights", "priority": "medium", "props": {{"width_hint": "half"}}}},
-    {{"component_type": "CalloutCard", "zone": "insights", "priority": "medium", "props": {{"width_hint": "half"}}}},
-    {{"component_type": "CodeBlock", "zone": "content", "priority": "high", "props": {{"width_hint": "full"}}}},
-    {{"component_type": "StepCard", "zone": "content", "priority": "high", "props": {{"width_hint": "full"}}}},
-    {{"component_type": "LinkCard", "zone": "resources", "priority": "medium", "props": {{"width_hint": "third"}}}},
-    {{"component_type": "RepoCard", "zone": "resources", "priority": "medium", "props": {{"width_hint": "third"}}}}
+    {{"component_type": "tldr", "zone": "hero", "priority": "high", "props": {{"width_hint": "full"}}}},
+    {{"component_type": "statCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
+    {{"component_type": "statCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
+    {{"component_type": "metricRow", "zone": "metrics", "priority": "medium", "props": {{"width_hint": "full"}}}},
+    {{"component_type": "keyTakeaways", "zone": "insights", "priority": "medium", "props": {{"width_hint": "half"}}}},
+    {{"component_type": "calloutCard", "zone": "insights", "priority": "medium", "props": {{"width_hint": "half"}}}},
+    {{"component_type": "codeBlock", "zone": "content", "priority": "high", "props": {{"width_hint": "full"}}}},
+    {{"component_type": "stepCard", "zone": "content", "priority": "high", "props": {{"width_hint": "full"}}}},
+    {{"component_type": "linkPreview", "zone": "resources", "priority": "medium", "props": {{"width_hint": "third"}}}},
+    {{"component_type": "profileCard", "zone": "resources", "priority": "medium", "props": {{"width_hint": "third"}}}}
   ],
   "variety_check": {{
     "unique_types_count": 8,
@@ -531,16 +478,16 @@ Return a JSON array of component specifications:
 ```json
 {{
   "components": [
-    {{"component_type": "StatCard"}},
-    {{"component_type": "StatCard"}},
-    {{"component_type": "StatCard"}},
-    {{"component_type": "StatCard"}},
-    {{"component_type": "StatCard"}},
-    {{"component_type": "StatCard"}},
-    {{"component_type": "CodeBlock"}},
-    {{"component_type": "CodeBlock"}},
-    {{"component_type": "CodeBlock"}},
-    {{"component_type": "CodeBlock"}}
+    {{"component_type": "statCard"}},
+    {{"component_type": "statCard"}},
+    {{"component_type": "statCard"}},
+    {{"component_type": "statCard"}},
+    {{"component_type": "statCard"}},
+    {{"component_type": "statCard"}},
+    {{"component_type": "codeBlock"}},
+    {{"component_type": "codeBlock"}},
+    {{"component_type": "codeBlock"}},
+    {{"component_type": "codeBlock"}}
   ],
   "variety_check": {{
     "unique_types_count": 2,
@@ -557,10 +504,10 @@ Return a JSON array of component specifications:
 2. **Diversity First**: Aim for 6-8 different component types minimum. No single type should exceed 40% of total.
 3. **Break Up Patterns**: Never have more than 2 consecutive identical components
 4. **Use Width Hints**: Specify width_hint for visual balance (third for stats, full for code/tables, half for callouts)
-5. **Use Semantic Zones**: ALWAYS assign a zone to each component (hero, metrics, insights, content, media, resources, tags)
-6. **Match Content to Best Type**: Use QuoteCard for quotes, HeadlineCard for news, StatCard for numbers, TimelineEvent for events
+5. **Use Semantic Zones**: ALWAYS assign a zone to each component (hero, metrics, insights, content, resources)
+6. **Match Content to Best Type**: Use quoteCard for quotes, headlineCard for news, statCard for numbers, stepCard for procedures
 7. **Provide Complete Props**: Include all necessary data for each component
-8. **Consolidate Lists**: Bullet points within a section go into ONE component (KeyTakeaways, CalloutCard) — not one RankedItem per bullet
+8. **Consolidate Lists**: Bullet points within a section go into ONE component (keyTakeaways, calloutCard, bulletList) — not one component per bullet
 9. **Stay in Range**: 15-25 components for long documents. More is not better.
 
 Begin your component selection now."""

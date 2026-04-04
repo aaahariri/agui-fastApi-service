@@ -7,7 +7,7 @@ ID generation, component emission, and factory functions.
 
 A2UI Protocol Compliance:
 - All components must have: type, id, props
-- Type format: "a2ui.ComponentName" (e.g., "a2ui.StatCard")
+- Type format: camelCase (e.g., "statCard", "codeBlock")
 - IDs must be unique within a component tree
 - Props are component-specific key-value pairs
 - Optional children field for layout components
@@ -106,7 +106,7 @@ class A2UIComponent(BaseModel):
     All components must conform to this structure for proper rendering.
 
     Attributes:
-        type: Component type identifier (e.g., "a2ui.StatCard", "a2ui.VideoCard")
+        type: Component type identifier in camelCase (e.g., "statCard", "codeBlock")
         id: Unique identifier for this component instance
         props: Component-specific properties as a dictionary
         children: Optional list of child component IDs or nested structure for layouts
@@ -114,7 +114,7 @@ class A2UIComponent(BaseModel):
     Example:
         ```python
         component = A2UIComponent(
-            type="a2ui.StatCard",
+            type="statCard",
             id="stat-1",
             props={
                 "value": "$196B",
@@ -127,8 +127,7 @@ class A2UIComponent(BaseModel):
     """
 
     type: str = Field(
-        description="A2UI component type (must start with 'a2ui.')",
-        pattern=r"^a2ui\.[A-Z][a-zA-Z0-9]*$"
+        description="Component type in camelCase (e.g., 'statCard', 'codeBlock')",
     )
 
     id: str = Field(
@@ -158,10 +157,10 @@ class A2UIComponent(BaseModel):
     @field_validator('type')
     @classmethod
     def validate_type(cls, v: str) -> str:
-        """Validate that type follows a2ui.ComponentName format."""
-        if not v.startswith('a2ui.'):
-            raise ValueError(f"Component type must start with 'a2ui.', got: {v}")
-        return v
+        """Validate that type is a non-empty string."""
+        if not v or not v.strip():
+            raise ValueError(f"Component type cannot be empty, got: {v}")
+        return v.strip()
 
     @field_validator('id')
     @classmethod
@@ -172,82 +171,32 @@ class A2UIComponent(BaseModel):
         return v.strip()
 
 
-# Component type registry - maps component types to validation rules
+# Component type registry — the 15 canonical types produced by the LLM
 VALID_COMPONENT_TYPES = {
-    # News & Trends
-    "a2ui.HeadlineCard",
-    "a2ui.TrendIndicator",
-    "a2ui.TimelineEvent",
-    "a2ui.NewsTicker",
-
-    # Media
-    "a2ui.VideoCard",
-    "a2ui.ImageCard",
-    "a2ui.PlaylistCard",
-    "a2ui.PodcastCard",
+    # Summary
+    "tldr",
+    "keyTakeaways",
 
     # Data & Statistics
-    "a2ui.StatCard",
-    "a2ui.MetricRow",
-    "a2ui.ProgressRing",
-    "a2ui.ComparisonBar",
-    "a2ui.DataTable",
-    "a2ui.MiniChart",
+    "statCard",
+    "metricRow",
+    "dataTable",
 
-    # Lists & Rankings
-    "a2ui.RankedItem",
-    "a2ui.ChecklistItem",
-    "a2ui.ProConItem",
-    "a2ui.BulletPoint",
-
-    # Resources & Links
-    "a2ui.LinkCard",
-    "a2ui.ToolCard",
-    "a2ui.BookCard",
-    "a2ui.RepoCard",
-
-    # People & Entities
-    "a2ui.ProfileCard",
-    "a2ui.CompanyCard",
-    "a2ui.QuoteCard",
-    "a2ui.ExpertTip",
-
-    # Summary & Overview
-    "a2ui.TLDR",
-    "a2ui.KeyTakeaways",
-    "a2ui.ExecutiveSummary",
-    "a2ui.TableOfContents",
+    # Content
+    "headlineCard",
+    "calloutCard",
+    "quoteCard",
+    "bulletList",
+    "codeBlock",
+    "stepCard",
 
     # Comparison
-    "a2ui.ComparisonTable",
-    "a2ui.VsCard",
-    "a2ui.FeatureMatrix",
-    "a2ui.PricingTable",
+    "comparisonTable",
+    "vsCard",
 
-    # Instructional
-    "a2ui.StepCard",
-    "a2ui.CodeBlock",
-    "a2ui.CalloutCard",
-    "a2ui.CommandCard",
-
-    # Layout
-    "a2ui.Section",
-    "a2ui.Grid",
-    "a2ui.Columns",
-    "a2ui.Tabs",
-    "a2ui.Accordion",
-    "a2ui.Carousel",
-    "a2ui.Sidebar",
-
-    # Tags & Categories
-    "a2ui.TagCloud",
-    "a2ui.CategoryBadge",
-    "a2ui.DifficultyBadge",
-    "a2ui.Tag",
-    "a2ui.Badge",
-    "a2ui.CategoryTag",
-    "a2ui.StatusIndicator",
-    "a2ui.PriorityBadge",
+    # Resource & People
+    "linkPreview",
+    "profileCard",
 }
 
 
@@ -268,19 +217,19 @@ def generate_id(component_type: str, prefix: str | None = None) -> str:
     3. Fallback: UUID4 for guaranteed uniqueness
 
     Args:
-        component_type: A2UI component type (e.g., "a2ui.StatCard")
+        component_type: Component type in camelCase (e.g., "statCard")
         prefix: Optional custom prefix for the ID (e.g., "stat", "video")
 
     Returns:
         Unique component ID string
 
     Examples:
-        >>> generate_id("a2ui.StatCard", "stat")
+        >>> generate_id("statCard", "stat")
         "stat-1"
-        >>> generate_id("a2ui.VideoCard")
-        "video-card-1"
-        >>> generate_id("a2ui.Section", "intro")
-        "intro-1"
+        >>> generate_id("codeBlock")
+        "code-block-1"
+        >>> generate_id("tldr")
+        "tldr-1"
     """
     global _id_counter
     _id_counter += 1
@@ -288,11 +237,9 @@ def generate_id(component_type: str, prefix: str | None = None) -> str:
     if prefix:
         return f"{prefix}-{_id_counter}"
 
-    # Extract component name from type (a2ui.StatCard -> stat-card)
-    if component_type.startswith("a2ui."):
-        # Convert PascalCase to kebab-case
-        name = component_type[5:]  # Remove "a2ui."
-        # Insert hyphens before capital letters and convert to lowercase
+    # Strip legacy a2ui. prefix if present, then convert camelCase/PascalCase to kebab-case
+    if component_type:
+        name = component_type.replace("a2ui.", "")
         kebab_name = ''.join(['-' + c.lower() if c.isupper() else c for c in name]).lstrip('-')
         return f"{kebab_name}-{_id_counter}"
 
@@ -325,7 +272,7 @@ def generate_component(
     and type validation. Ensures all components conform to A2UI protocol.
 
     Args:
-        component_type: A2UI component type (must be in VALID_COMPONENT_TYPES)
+        component_type: Component type in camelCase (must be in VALID_COMPONENT_TYPES)
         props: Component properties dictionary
         component_id: Optional custom ID (auto-generated if not provided)
         children: Optional child component IDs for layout components
@@ -340,21 +287,39 @@ def generate_component(
 
     Examples:
         >>> component = generate_component(
-        ...     "a2ui.StatCard",
+        ...     "statCard",
         ...     {"value": "$196B", "label": "Market Size", "trend": "up"},
         ...     layout={"width": "third"}
         ... )
         >>> component.type
-        "a2ui.StatCard"
+        "statCard"
         >>> component.id
         "stat-card-1"
     """
-    # Validate component type
+    # Normalize legacy a2ui.PascalCase types to camelCase
+    _LEGACY_TYPE_MAP = {
+        "a2ui.StatCard": "statCard",
+        "a2ui.HeadlineCard": "headlineCard",
+        "a2ui.CalloutCard": "calloutCard",
+        "a2ui.KeyTakeaways": "keyTakeaways",
+        "a2ui.DataTable": "dataTable",
+        "a2ui.ComparisonTable": "comparisonTable",
+        "a2ui.QuoteCard": "quoteCard",
+        "a2ui.StepCard": "stepCard",
+        "a2ui.TLDR": "tldr",
+        "a2ui.VsCard": "vsCard",
+        "a2ui.CodeBlock": "codeBlock",
+        "a2ui.ProfileCard": "profileCard",
+        "a2ui.BulletPoint": "bulletList",
+        "a2ui.MetricRow": "metricRow",
+        "a2ui.LinkCard": "linkPreview",
+    }
+    if component_type in _LEGACY_TYPE_MAP:
+        component_type = _LEGACY_TYPE_MAP[component_type]
+
+    # Warn if component type is not in the canonical set (but don't reject)
     if component_type not in VALID_COMPONENT_TYPES:
-        raise ValueError(
-            f"Invalid component type: {component_type}. "
-            f"Must be one of: {', '.join(sorted(VALID_COMPONENT_TYPES))}"
-        )
+        print(f"[WARN] Component type '{component_type}' not in canonical set")
 
     # Generate ID if not provided
     if component_id is None:
@@ -444,14 +409,12 @@ def validate_component_props(component_type: str, props: dict[str, Any]) -> bool
     """
     # Define required props for common components
     required_props = {
-        "a2ui.StatCard": ["value", "label"],
-        "a2ui.VideoCard": ["videoId", "platform"],
-        "a2ui.HeadlineCard": ["title"],
-        "a2ui.RankedItem": ["rank", "title"],
-        "a2ui.CodeBlock": ["code", "language"],
-        "a2ui.Section": ["title"],
-        "a2ui.Grid": ["columns"],
-        "a2ui.TLDR": ["summary"],
+        "statCard": ["value", "label"],
+        "headlineCard": ["title"],
+        "codeBlock": ["code", "language"],
+        "tldr": ["content"],
+        "dataTable": ["headers", "rows"],
+        "stepCard": ["title", "description"],
     }
 
     if component_type in required_props:
@@ -546,7 +509,7 @@ def generate_headline_card(
     if image_url:
         props["imageUrl"] = image_url
 
-    return generate_component("a2ui.HeadlineCard", props)
+    return generate_component("headlineCard", props)
 
 
 def generate_trend_indicator(
@@ -1176,7 +1139,7 @@ def generate_stat_card(
     if change is not None:
         props["change"] = change
 
-    return generate_component("a2ui.StatCard", props)
+    return generate_component("statCard", props)
 
 
 def generate_metric_row(
@@ -1247,7 +1210,7 @@ def generate_metric_row(
     if status:
         props["status"] = status
 
-    return generate_component("a2ui.MetricRow", props)
+    return generate_component("metricRow", props)
 
 
 def generate_progress_ring(
@@ -1504,7 +1467,7 @@ def generate_data_table(
         "striped": striped,
     }
 
-    return generate_component("a2ui.DataTable", props)
+    return generate_component("dataTable", props)
 
 
 def generate_mini_chart(
@@ -1975,7 +1938,7 @@ def generate_bullet_point(
     if icon:
         props["icon"] = icon
 
-    return generate_component("a2ui.BulletPoint", props)
+    return generate_component("bulletList", props)
 
 
 # Resource Component Generators
@@ -2180,7 +2143,7 @@ def generate_link_card(
     if tags:
         props["tags"] = tags
 
-    return generate_component("a2ui.LinkCard", props)
+    return generate_component("linkPreview", props)
 
 
 def generate_tool_card(
@@ -2624,7 +2587,7 @@ def generate_profile_card(
     if social_links:
         props["socialLinks"] = social_links
 
-    return generate_component("a2ui.ProfileCard", props)
+    return generate_component("profileCard", props)
 
 
 def generate_company_card(
@@ -2811,7 +2774,7 @@ def generate_quote_card(
     if source:
         props["context"] = source
 
-    return generate_component("a2ui.QuoteCard", props)
+    return generate_component("quoteCard", props)
 
 
 def generate_expert_tip(
@@ -2959,7 +2922,7 @@ def generate_tldr(
         "maxLength": max_length,
     }
 
-    return generate_component("a2ui.TLDR", props)
+    return generate_component("tldr", props)
 
 
 def generate_key_takeaways(
@@ -3039,7 +3002,7 @@ def generate_key_takeaways(
     if icon:
         props["icon"] = icon
 
-    return generate_component("a2ui.KeyTakeaways", props)
+    return generate_component("keyTakeaways", props)
 
 
 def generate_executive_summary(
@@ -3436,7 +3399,7 @@ def generate_step_card(
     if action:
         props["action"] = action.strip()
 
-    return generate_component("a2ui.StepCard", props)
+    return generate_component("stepCard", props)
 
 
 def generate_code_block(
@@ -3522,7 +3485,7 @@ def generate_code_block(
     if highlight_lines:
         props["highlightLines"] = sorted(highlight_lines)
 
-    return generate_component("a2ui.CodeBlock", props)
+    return generate_component("codeBlock", props)
 
 
 def generate_callout_card(
@@ -3589,7 +3552,7 @@ def generate_callout_card(
     if icon:
         props["icon"] = icon.strip()
 
-    return generate_component("a2ui.CalloutCard", props)
+    return generate_component("calloutCard", props)
 
 
 def generate_command_card(
@@ -3765,7 +3728,7 @@ def generate_comparison_table(
     if highlighted_column is not None:
         props["highlightedColumn"] = highlighted_column
 
-    return generate_component("a2ui.ComparisonTable", props)
+    return generate_component("comparisonTable", props)
 
 
 def generate_vs_card(
@@ -3844,7 +3807,7 @@ def generate_vs_card(
         # Convert 'a'/'b' to 'left'/'right' for frontend compatibility
         props["winner"] = "left" if winner == "a" else "right"
 
-    return generate_component("a2ui.VsCard", props)
+    return generate_component("vsCard", props)
 
 
 def generate_feature_matrix(
