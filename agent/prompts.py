@@ -454,7 +454,7 @@ Return a JSON array of component specifications:
 ```json
 {{
   "components": [
-    {{"component_type": "tldr", "zone": "hero", "priority": "high", "props": {{"width_hint": "full"}}}},
+    {{"component_type": "tldr", "zone": "hero", "priority": "high", "props": {{"content": "Brief summary of the document's key points", "width_hint": "full"}}}},
     {{"component_type": "statCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
     {{"component_type": "statCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
     {{"component_type": "metricRow", "zone": "metrics", "priority": "medium", "props": {{"width_hint": "full"}}}},

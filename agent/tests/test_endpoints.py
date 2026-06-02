@@ -14,6 +14,13 @@ from main import app
 from agent import DashboardState
 
 
+@pytest.fixture(autouse=True)
+def _disable_api_key_auth():
+    """Disable API_KEY auth for all endpoint tests."""
+    with patch("main.API_KEY", ""):
+        yield
+
+
 class TestHealthEndpoint:
     """Tests for GET /health."""
 

@@ -69,21 +69,14 @@ class TestPromptTemplates:
 
     def test_component_selection_prompt_structure(self):
         """Test that component selection prompt has component categories."""
-        assert "News & Trends Components" in COMPONENT_SELECTION_PROMPT
-        assert "Media Components" in COMPONENT_SELECTION_PROMPT
-        assert "Data & Statistics Components" in COMPONENT_SELECTION_PROMPT
-        assert "List & Navigation Components" in COMPONENT_SELECTION_PROMPT
-        assert "Resource & Link Components" in COMPONENT_SELECTION_PROMPT
-        assert "People & Social Components" in COMPONENT_SELECTION_PROMPT
         assert "Summary Components" in COMPONENT_SELECTION_PROMPT
-        assert "Instructional Components" in COMPONENT_SELECTION_PROMPT
+        assert "Data & Statistics Components" in COMPONENT_SELECTION_PROMPT
+        assert "Content Components" in COMPONENT_SELECTION_PROMPT
         assert "Comparison Components" in COMPONENT_SELECTION_PROMPT
-        assert "Layout Components" in COMPONENT_SELECTION_PROMPT
-        assert "Tagging Components" in COMPONENT_SELECTION_PROMPT
+        assert "Resource & People Components" in COMPONENT_SELECTION_PROMPT
 
     def test_component_selection_prompt_has_variety_rules(self):
         """Test that component selection prompt includes variety enforcement."""
-        assert "VARIETY ENFORCEMENT RULES" in COMPONENT_SELECTION_PROMPT
         assert "Minimum Component Type Diversity" in COMPONENT_SELECTION_PROMPT
         assert "No Consecutive Repetition" in COMPONENT_SELECTION_PROMPT
         assert "at least 4 DIFFERENT component types" in COMPONENT_SELECTION_PROMPT
@@ -110,8 +103,8 @@ class TestContentAnalysisPromptFormatting:
 
     def test_format_long_markdown_truncates(self):
         """Test that very long markdown content is truncated."""
-        # Create content longer than 8000 characters
-        markdown = "# Test\n\n" + ("This is a very long document. " * 500)
+        # Create content longer than 30000 characters
+        markdown = "# Test\n\n" + ("This is a very long document. " * 1500)
         result = format_content_analysis_prompt(markdown)
 
         assert "content truncated" in result
@@ -267,12 +260,12 @@ class TestComponentSelectionPromptFormatting:
         assert 'Tutorial format with code examples' in result
         assert 'CodeBlock' in result
 
-    def test_format_shows_first_5_sections(self):
-        """Test that only first 5 sections are shown."""
+    def test_format_shows_sections_up_to_limit(self):
+        """Test that sections are shown up to the display limit."""
         content_analysis = {
             'document_type': 'guide',
             'title': 'Long Guide',
-            'sections': [f'Section {i}' for i in range(20)]
+            'sections': [f'Section {i}' for i in range(50)]
         }
 
         layout_decision = {
@@ -284,8 +277,8 @@ class TestComponentSelectionPromptFormatting:
         result = format_component_selection_prompt(content_analysis, layout_decision)
 
         assert 'Section 0' in result
-        assert 'Section 4' in result
-        assert '(showing first 5)' in result
+        assert 'Section 29' in result
+        assert '50 total' in result
 
     def test_format_handles_missing_fields(self):
         """Test formatting when some fields are missing."""
@@ -649,7 +642,7 @@ class TestPromptEdgeCases:
 
         result = format_component_selection_prompt(content_analysis, layout_decision)
 
-        # Should truncate to first 5
+        # Should show sections up to the display limit (30)
         assert 'Section 0' in result
-        assert 'Section 4' in result
-        assert '(showing first 5)' in result
+        assert 'Section 29' in result
+        assert '100 total' in result

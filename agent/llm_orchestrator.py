@@ -54,6 +54,7 @@ from a2ui_generator import (
     generate_book_card,
     generate_timeline_event,
 )
+from logger import logger
 from content_analyzer import parse_markdown, ContentAnalysis, _classify_heuristic
 from prompts import (
     format_content_analysis_prompt,
@@ -164,7 +165,7 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
 
         if response.status_code != 200:
             error_text = response.text
-            print(f"[LLM ERROR] Status {response.status_code}: {error_text}")
+            logger.error(f"[LLM] Status {response.status_code}: {error_text}")
             raise Exception(f"LLM API error: {response.status_code} - {error_text}")
 
         result = response.json()
@@ -196,13 +197,13 @@ def extract_json_from_response(response: str) -> dict:
     try:
         return json.loads(json_str)
     except json.JSONDecodeError as e:
-        print(f"[JSON PARSE ERROR] {e}", flush=True)
+        logger.warning(f"[JSON] Parse error: {e}")
         # Try to recover truncated JSON by extracting complete component objects
         recovered = _recover_truncated_components(json_str)
         if recovered:
-            print(f"[JSON RECOVERY] Recovered {len(recovered)} components from truncated response", flush=True)
+            logger.info(f"[JSON] Recovered {len(recovered)} components from truncated response")
             return {"components": recovered}
-        print(f"[RAW RESPONSE] {response[:500]}...", flush=True)
+        logger.debug(f"[JSON] Raw response: {response[:500]}...")
         return {}
 
 
@@ -281,12 +282,12 @@ Always respond with valid JSON only, no additional text."""
 
     prompt = format_content_analysis_prompt(markdown_content)
 
-    print(f"[LLM] Analyzing content... (prompt length: {len(prompt)} chars)")
+    logger.info(f"[LLM] Analyzing content... (prompt length: {len(prompt)} chars)")
     try:
         response = await call_llm(prompt, system_prompt)
-        print(f"[LLM] Analysis response received ({len(response)} chars)")
+        logger.info(f"[LLM] Analysis response received ({len(response)} chars)")
     except Exception as e:
-        print(f"[LLM ERROR] Content analysis failed: {e}")
+        logger.error(f"[LLM] Content analysis failed: {e}")
         import traceback
         traceback.print_exc()
         response = ""
@@ -303,7 +304,7 @@ Always respond with valid JSON only, no additional text."""
             "reasoning": "Fallback to heuristic analysis"
         }
 
-    print(f"[LLM] Content analyzed: {result.get('document_type', 'unknown')}")
+    logger.info(f"[LLM] Content analyzed: {result.get('document_type', 'unknown')}")
     return result
 
 
@@ -322,7 +323,7 @@ Always respond with valid JSON only, no additional text."""
 
     prompt = format_layout_selection_prompt(content_analysis)
 
-    print("[LLM] Selecting layout...")
+    logger.info("[LLM] Selecting layout...")
     response = await call_llm(prompt, system_prompt)
     result = extract_json_from_response(response)
 
@@ -336,7 +337,7 @@ Always respond with valid JSON only, no additional text."""
             "component_suggestions": ["TLDR", "KeyTakeaways", "StatCard", "CalloutCard"]
         }
 
-    print(f"[LLM] Layout selected: {result.get('layout_type', 'unknown')}")
+    logger.info(f"[LLM] Layout selected: {result.get('layout_type', 'unknown')}")
     return result
 
 
@@ -385,13 +386,12 @@ CRITICAL: You must generate components covering ALL sections and topics above, n
 Extract REAL data from the document to populate component props.
 Return JSON with "components" array."""
 
-    import sys
-    print(f"[LLM] Selecting components... (prompt length: {len(prompt)} chars)", flush=True)
+    logger.info(f"[LLM] Selecting components... (prompt length: {len(prompt)} chars)")
     try:
         response = await call_llm(prompt, system_prompt, max_tokens=16000, temperature=0.4)
-        print(f"[LLM] Response received ({len(response)} chars)", flush=True)
+        logger.info(f"[LLM] Response received ({len(response)} chars)")
     except Exception as e:
-        print(f"[LLM ERROR] Component selection LLM call failed: {e}", file=sys.stderr, flush=True)
+        logger.error(f"[LLM] Component selection failed: {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -401,15 +401,15 @@ Return JSON with "components" array."""
     components = result.get("components", [])
 
     if not components:
-        print(f"[LLM ERROR] No components parsed. Response first 1000 chars:\n{response[:1000]}", file=sys.stderr, flush=True)
+        logger.error(f"[LLM] No components parsed. Response first 1000 chars:\n{response[:1000]}")
         raise ValueError(f"LLM returned no components. Parsed keys: {list(result.keys())}. Response length: {len(response)}. First 200 chars: {response[:200]}")
 
     # Validate variety
     variety = validate_component_variety(components)
-    print(f"[LLM] Components selected: {len(components)}, unique types: {variety['unique_types_count']}")
+    logger.info(f"[LLM] Components selected: {len(components)}, unique types: {variety['unique_types_count']}")
     if not variety['valid']:
         for violation in variety.get('violations', []):
-            print(f"[LLM VARIETY WARNING] {violation}")
+            logger.warning(f"[VARIETY] {violation}")
 
     return components
 
@@ -455,19 +455,19 @@ def apply_layout_and_zone(component: A2UIComponent, spec: dict) -> A2UIComponent
         for key, value in COMPONENT_DEFAULT_ZONES.items():
             if key.lower() == lower_key:
                 default_zone = value
-                print(f"[ZONE] Case-insensitive match: '{component_type}' → '{key}' → zone='{value}'")
+                logger.debug(f"[ZONE] Case-insensitive match: '{component_type}' → '{key}' → zone='{value}'")
                 break
 
     # Final fallback to "content"
     if default_zone is None:
         default_zone = "content"
-        print(f"[ZONE] No default zone for '{component_type}', using 'content'")
+        logger.debug(f"[ZONE] No default zone for '{component_type}', using 'content'")
 
     # Use explicit zone or fall back to default
     zone = explicit_zone or default_zone
 
     # Debug logging for zone assignment
-    print(f"[ZONE] {component_type}: explicit_zone={explicit_zone!r}, default={default_zone}, final={zone}")
+    logger.debug(f"[ZONE] {component_type}: explicit_zone={explicit_zone!r}, default={default_zone}, final={zone}")
 
     # Apply the zone
     component.zone = zone
@@ -585,23 +585,36 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
     if lookup in COMPONENT_TYPE_CANONICAL:
         component_type = COMPONENT_TYPE_CANONICAL[lookup]
         if original_type != component_type:
-            print(f"[BUILD] Normalized component type: '{original_type}' → '{component_type}'")
+            logger.debug(f"[BUILD] Normalized component type: '{original_type}' → '{component_type}'")
     elif component_type and component_type not in COMPONENT_TYPE_CANONICAL.values():
-        print(f"[BUILD] Unknown component type: '{component_type}' (will use fallback)")
+        logger.warning(f"[BUILD] Unknown component type: '{component_type}'")
 
     try:
         # Map component types to generator functions
         if component_type == "tldr":
-            content = props.get("content", "Summary of the document")
+            # Try multiple keys the LLM might use for tldr text
+            content = (
+                props.get("content")
+                or props.get("text")
+                or props.get("body")
+                or props.get("summary")
+                or spec.get("data_source")
+                or content_analysis.get("title", "")
+            )
+            if not content or not content.strip():
+                logger.warning("[SKIP] tldr: no content found in props or fallbacks")
+                return None
+            content = content.strip()
             if len(content) > 300:
                 content = content[:297] + "..."
             return generate_tldr(content=content, max_length=props.get("max_length", 200))
 
         elif component_type == "keyTakeaways":
-            items = props.get("items", ["Key takeaway 1", "Key takeaway 2"])
-            if not items:
-                items = ["Key takeaway 1", "Key takeaway 2"]
-            return generate_key_takeaways(items=items[:5])
+            items = props.get("items")
+            if not items or not isinstance(items, list) or not any(isinstance(i, str) and i.strip() for i in items):
+                logger.warning("[SKIP] keyTakeaways: no valid items provided by LLM")
+                return None
+            return generate_key_takeaways(items=[i for i in items if isinstance(i, str) and i.strip()][:5])
 
         elif component_type == "statCard":
             change_val = props.get("trendValue", props.get("change_value", props.get("change")))
@@ -617,9 +630,14 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             change_type_map = {"up": "positive", "down": "negative", "positive": "positive", "negative": "negative"}
             change_type = change_type_map.get(trend, "neutral")
 
+            title = props.get("label") or props.get("title")
+            value = props.get("value")
+            if not title or not value:
+                logger.warning(f"[SKIP] statCard: missing required title={title!r} or value={value!r}")
+                return None
             return generate_stat_card(
-                title=props.get("label", props.get("title", "Metric")),
-                value=str(props.get("value", "N/A")),
+                title=title,
+                value=str(value),
                 unit=props.get("unit"),
                 change=change_float,
                 change_type=change_type,
@@ -631,51 +649,72 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             if metrics_data and isinstance(metrics_data, list):
                 metrics = []
                 for m in metrics_data:
-                    if isinstance(m, dict):
+                    if isinstance(m, dict) and m.get("label") and m.get("value") is not None:
                         metrics.append({
-                            "label": m.get("label", "Metric"),
-                            "value": m.get("value", "N/A"),
+                            "label": m["label"],
+                            "value": m["value"],
                             "unit": m.get("unit", "")
                         })
+                if not metrics:
+                    logger.warning("[SKIP] metricRow: no valid metrics with label+value in array")
+                    return None
                 return generate_metric_row(
-                    label=props.get("title", props.get("label", "")),
+                    label=props.get("title") or props.get("label", ""),
                     metrics=metrics
                 )
             else:
+                label = props.get("label") or props.get("title")
+                value = props.get("value")
+                if not label or value is None:
+                    logger.warning(f"[SKIP] metricRow: missing required label={label!r} or value={value!r}")
+                    return None
                 return generate_metric_row(
-                    label=props.get("label", props.get("title", "Metric")),
-                    value=props.get("value", "N/A"),
+                    label=label,
+                    value=value,
                     unit=props.get("unit", "")
                 )
 
         elif component_type == "dataTable":
-            headers = props.get("headers", ["Column 1", "Column 2"])
-            rows = props.get("rows", [["Data 1", "Data 2"]])
+            headers = props.get("headers")
+            rows = props.get("rows")
             if not headers or not rows:
+                logger.warning("[SKIP] dataTable: missing required headers or rows")
                 return None
             return generate_data_table(headers=headers, rows=rows)
 
         elif component_type == "headlineCard":
+            title = props.get("headline") or props.get("title")
+            if not title:
+                logger.warning("[SKIP] headlineCard: missing required headline/title")
+                return None
             return generate_headline_card(
-                title=props.get("headline", props.get("title", "Headline")),
-                summary=props.get("subheadline", props.get("subtitle", props.get("summary", ""))),
-                source=props.get("source", "Source"),
-                published_at=props.get("timestamp", props.get("published_at", props.get("publishedAt", ""))),
+                title=title,
+                summary=props.get("subheadline") or props.get("subtitle") or props.get("summary", ""),
+                source=props.get("source", ""),
+                published_at=props.get("timestamp") or props.get("published_at") or props.get("publishedAt", ""),
                 sentiment=props.get("sentiment", "neutral"),
-                image_url=props.get("image_url", props.get("imageUrl"))
+                image_url=props.get("image_url") or props.get("imageUrl")
             )
 
         elif component_type == "calloutCard":
+            content = props.get("content")
+            if not content or not str(content).strip():
+                logger.warning("[SKIP] calloutCard: missing required content")
+                return None
             return generate_callout_card(
                 type=props.get("type", "info"),
-                title=props.get("title", "Note"),
-                content=props.get("content", "Important information")
+                title=props.get("title", ""),
+                content=content
             )
 
         elif component_type == "quoteCard":
+            text = props.get("quote") or props.get("text")
+            if not text or not str(text).strip():
+                logger.warning("[SKIP] quoteCard: missing required quote text")
+                return None
             return generate_quote_card(
-                text=props.get("quote", props.get("text", "Quote text")),
-                author=props.get("author", "Unknown"),
+                text=text,
+                author=props.get("author", ""),
                 source=props.get("source")
             )
 
@@ -684,14 +723,18 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             text = props.get("text")
             if not text:
                 items = props.get("items", [])
-                text = items[0] if items and isinstance(items, list) else "Bullet point"
+                text = items[0] if items and isinstance(items, list) and items else None
+            if not text or not str(text).strip():
+                logger.warning("[SKIP] bulletList: no text content provided by LLM")
+                return None
             return generate_bullet_point(
                 text=text if isinstance(text, str) else str(text)
             )
 
         elif component_type == "codeBlock":
-            code = props.get("code", "// Code example")
+            code = props.get("code")
             if not code or not code.strip():
+                logger.warning("[SKIP] codeBlock: no code content provided by LLM")
                 return None
             return generate_code_block(
                 code=code,
@@ -699,10 +742,15 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             )
 
         elif component_type == "stepCard":
+            title = props.get("title")
+            description = props.get("description")
+            if not title or not description:
+                logger.warning(f"[SKIP] stepCard: missing required title={title!r} or description={description!r}")
+                return None
             return generate_step_card(
                 step_number=props.get("step_number", props.get("number", 1)),
-                title=props.get("title", "Step"),
-                description=props.get("description", "Step description")
+                title=title,
+                description=description
             )
 
         elif component_type == "comparisonTable":
@@ -713,9 +761,14 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             return generate_comparison_table(items=items, features=features)
 
         elif component_type == "vsCard":
+            item_a = props.get("itemA") or props.get("item_a")
+            item_b = props.get("itemB") or props.get("item_b")
+            if not item_a or not item_b:
+                logger.warning(f"[SKIP] vsCard: missing required itemA={item_a!r} or itemB={item_b!r}")
+                return None
             return generate_component("vsCard", {
-                "itemA": props.get("itemA", props.get("item_a", "Option A")),
-                "itemB": props.get("itemB", props.get("item_b", "Option B")),
+                "itemA": item_a,
+                "itemB": item_b,
                 "winner": props.get("winner"),
                 "criteria": props.get("criteria", []),
             })
@@ -723,33 +776,33 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
         elif component_type == "linkPreview":
             url = props.get("url", "")
             if not is_valid_external_url(url):
-                print(f"[SKIP] linkPreview with invalid URL: {url!r}")
+                logger.warning(f"[SKIP] linkPreview: invalid URL: {url!r}")
                 return None
             return generate_link_card(
                 url=url,
-                title=props.get("title", "Resource")
+                title=props.get("title", "")
             )
 
         elif component_type == "profileCard":
+            name = props.get("name")
+            if not name:
+                logger.warning("[SKIP] profileCard: missing required name")
+                return None
             return generate_component("profileCard", {
-                "name": props.get("name", "Person"),
-                "title": props.get("title", props.get("role", "")),
-                "bio": props.get("bio", props.get("description", "")),
-                "imageUrl": props.get("imageUrl", props.get("avatar")),
+                "name": name,
+                "title": props.get("title") or props.get("role", ""),
+                "bio": props.get("bio") or props.get("description", ""),
+                "imageUrl": props.get("imageUrl") or props.get("avatar"),
                 "links": props.get("links", [])
             })
 
         else:
-            # Generic fallback - create a callout with the data
-            print(f"[COMPONENT] Unknown type '{component_type}', using calloutCard fallback")
-            return generate_callout_card(
-                type="info",
-                title=component_type,
-                content=json.dumps(props, indent=2)[:200] if props else "Component data"
-            )
+            # Unknown component type — skip rather than emit hardcoded fallback
+            logger.warning(f"[SKIP] Unknown component type '{component_type}' — no fallback emitted")
+            return None
 
     except Exception as e:
-        print(f"[COMPONENT ERROR] Failed to build {component_type}: {e}")
+        logger.error(f"[BUILD] Failed to build {component_type}: {e}")
         return None
 
 
@@ -769,15 +822,15 @@ async def orchestrate_dashboard_with_llm(markdown_content: str) -> AsyncGenerato
     # Reset ID counter for fresh component IDs
     reset_id_counter()
 
-    print("\n" + "="*60)
-    print("[ORCHESTRATOR] Starting LLM-powered dashboard generation")
-    print("="*60)
+    logger.info("=" * 60)
+    logger.info("[ORCHESTRATOR] Starting LLM-powered dashboard generation")
+    logger.info("=" * 60)
 
     # Step 1: Parse markdown structure (fast, no LLM)
     parsed = parse_markdown(markdown_content)
-    print(f"[PARSE] Title: {parsed.get('title', 'Untitled')}")
-    print(f"[PARSE] Sections: {len(parsed.get('sections', []))}")
-    print(f"[PARSE] Code blocks: {len(parsed.get('code_blocks', []))}")
+    logger.info(f"[PARSE] Title: {parsed.get('title', 'Untitled')}")
+    logger.info(f"[PARSE] Sections: {len(parsed.get('sections', []))}")
+    logger.info(f"[PARSE] Code blocks: {len(parsed.get('code_blocks', []))}")
 
     # Step 2: Analyze content with LLM
     content_analysis = await analyze_content_with_llm(markdown_content)
@@ -807,7 +860,7 @@ async def orchestrate_dashboard_with_llm(markdown_content: str) -> AsyncGenerato
     expanded_specs = expand_component_specs(component_specs)
 
     # Step 6: Build and yield A2UI components
-    print(f"\n[BUILD] Building {len(expanded_specs)} components (expanded from {len(component_specs)} specs)...")
+    logger.info(f"[BUILD] Building {len(expanded_specs)} components (expanded from {len(component_specs)} specs)...")
 
     components_built = 0
     component_types_used = set()
@@ -820,11 +873,11 @@ async def orchestrate_dashboard_with_llm(markdown_content: str) -> AsyncGenerato
 
             components_built += 1
             component_types_used.add(component.type)
-            print(f"[YIELD] Component {components_built}: {component.type} (id={component.id}, width={component.layout.get('width', 'full')}, zone={component.zone})")
+            logger.info(f"[YIELD] Component {components_built}: {component.type} (id={component.id}, width={component.layout.get('width', 'full')}, zone={component.zone})")
             yield component
 
-    print(f"\n[COMPLETE] Generated {components_built} components with {len(component_types_used)} unique types")
-    print("="*60 + "\n")
+    logger.info(f"[COMPLETE] Generated {components_built} components with {len(component_types_used)} unique types")
+    logger.info("=" * 60)
 
 
 async def orchestrate_dashboard_with_llm_list(markdown_content: str) -> list[A2UIComponent]:

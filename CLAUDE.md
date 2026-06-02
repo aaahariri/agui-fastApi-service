@@ -39,6 +39,7 @@ cd frontend && npm install && npm run dev
 - **Component renderers (frontend)**: `frontend/src/lib/a2ui-catalog.tsx` — React components keyed by type.
 - **Endpoints**: `agent/main.py` — `POST /` (AG-UI streaming), `POST /api/generate` (sync JSON), `GET /info`, `GET /health`.
 - **LLM prompts**: `agent/prompts.py` — all prompt text lives here exclusively.
+- **Logging**: `agent/logger.py` → `agent/logs/agent.log`. Auto-reset on server start. DEBUG-level detail (skipped components, zone resolution) in the file; INFO+ on console.
 
 ## Key Conventions
 

@@ -20,6 +20,7 @@ from starlette.requests import Request
 
 from agent import agent, DashboardState
 from pydantic_ai.ag_ui import StateDeps
+from logger import logger, reset_log_file
 
 # Configuration
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
@@ -300,17 +301,19 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     """Startup event handler."""
-    print(f"[*] Second Brain Agent (AG-UI) starting on port {BACKEND_PORT}")
-    print(f"[*] AG-UI endpoint: POST http://localhost:{BACKEND_PORT}/")
-    print(f"[*] Sync endpoint: POST http://localhost:{BACKEND_PORT}/api/generate")
-    print(f"[*] Info endpoint: GET http://localhost:{BACKEND_PORT}/info")
-    print(f"[*] Health endpoint: GET http://localhost:{BACKEND_PORT}/health")
+    log_path = reset_log_file()
+    logger.info(f"Log file reset: {log_path}")
+    logger.info(f"Second Brain Agent (AG-UI) starting on port {BACKEND_PORT}")
+    logger.info(f"AG-UI endpoint: POST http://localhost:{BACKEND_PORT}/")
+    logger.info(f"Sync endpoint: POST http://localhost:{BACKEND_PORT}/api/generate")
+    logger.info(f"Info endpoint: GET http://localhost:{BACKEND_PORT}/info")
+    logger.info(f"Health endpoint: GET http://localhost:{BACKEND_PORT}/health")
 
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
-        print("[!] WARNING: OPENROUTER_API_KEY not set")
+        logger.warning("OPENROUTER_API_KEY not set")
     else:
-        print("[+] OpenRouter API key configured")
+        logger.info("OpenRouter API key configured")
 
 
 if __name__ == "__main__":
