@@ -1,6 +1,18 @@
-# Experiment — `/api/generate` Latency (baseline-first)
+# AG-UI `/generate` — Model & Latency Experiments (Hub)
 
-> Living doc. Append results to the tables; never tune more than one lever per trial. Plan ref: `~/.claude/plans/first-create-an-experiment-soft-aho.md`.
+> **Hub doc** for experimenting with models / latency on the AG-UI service's `POST /api/generate`. Each experiment appends a dated section + results table below. One lever per trial; compare latency AND quality (gates + fidelity) vs the recorded baseline. Keep model overrides shell-only (`OPENROUTER_MODEL=...`) — don't edit `.env`.
+> Plan (archived): `startup45-WebApp-v1/project-management/plans/completed/2026-06-02-agui-generate-latency-experiment.md`.
+
+## TL;DR — Experiment #1 (2026-06-02): baseline + dedup/bug-fixes + Haiku vs Sonnet
+- **Shipped:** dedup of the duplicate analyze call (**≈14–20% faster**: 57–83s → 49–67s) + metricRow build fix + `layout_type` now returned. (+4 tests; 587 pass.) Commit `5bb2f7b`.
+- **Model: Sonnet-4 kept.** Haiku-4.5 across 10 runs was only ~5–13% faster (≈1.5×/token, not 5–10×) with lower component reliability + variety → not adopted.
+- **Latency is NOT model-bound; no caps set.** Real future levers: stream to UI (perceived) or reduce the components-call output. Deferred per founder ("ship what we have").
+- Commits: `ad6497a` baseline · `5bb2f7b` fixes · `066cefe` Haiku experiment · `0303708` conclusion.
+
+## Adding a new model experiment
+Append `## Experiment N — <date>: <hypothesis>`: state the single lever, run the 10 inputs (`agent/experiments/inputs/idea-*.md`) via the run helper in **Setup** below, record latency + quality vs baseline, then a verdict. Accept only if quality holds.
+
+---
 
 ## Goal
 Measure real `/api/generate` latency (baseline, no changes), confirm output quality, and decide whether it's acceptable as-is. Only if too slow: reduce LLM duration with the cheapest levers (per-call model routing, token caps) **without degrading output quality**. Set caps from data — never blindly.
