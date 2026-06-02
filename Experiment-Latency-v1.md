@@ -103,8 +103,41 @@ Model unchanged (all Sonnet-4). Changes: `agent.py` (cache raw analysis, pass it
 
 ---
 
+## Phase B — Step 2: Haiku-4.5 consistency experiment (10 runs) — 2026-06-02
+
+Ran ALL calls on `anthropic/claude-haiku-4.5` via shell override `OPENROUTER_MODEL=...` (no `.env` edit; `load_dotenv(override=False)` → shell wins). Confirmed: live process env = haiku-4.5; OpenRouter served `claude-4.5-haiku-20251001`. 10 distinct Arabic inputs (idea-1…idea-10).
+
+**Latency:** mean **49.9s** (min 44.4, max 60.8, stdev 4.7). Per-idea vs Sonnet (post-fix, idea-1/2/3): 48.5/54.5/60.8 vs 48.7/62.9/67.1 → only **~5–13% faster**.
+**Why so small:** direct OpenRouter probe (≈1.5k-token JSON) → Haiku **5.4s/776tok** vs Sonnet **6.8s/649tok** ⇒ Haiku ≈ **1.5×/token**, NOT 5–10×. Fixed overhead + generation dominate; switching model barely moves total latency.
+
+**Consistency (all 10):** status=complete ✅, 0 hard errors ✅, layout_type set ✅, uniq_types ≥4 ✅ (mean 6.1), components 18–33 (mean 25.3, stdev 4.3).
+
+**Quality gaps vs Sonnet (Haiku-specific instruction-following):**
+- `calloutCard type:"positive"` — invalid enum (valid: success/error/info/note/warning/tip) → **4 calloutCards dropped** across runs.
+- `vsCard` missing itemA/itemB → **3 skipped**; `stepCard` missing description → **1 skipped**.
+- Higher single-type **dominance** (up to 64% on idea-4) → less variety. Sonnet baseline did not produce these violations.
+
+**Verdict:** Haiku CAN produce complete, valid dashboards consistently, but drops ~0.8 components/run from schema violations and leans harder on one type — for only a marginal latency gain. **Speed is not the win; cost is** (Haiku ≈ ⅓ Sonnet $/token). So adoption is a **cost-vs-quality** call, not a latency one.
+
+**If Haiku is adopted** (founder decision), recommended hardening: (a) builder leniency — map invalid calloutCard types (e.g. `positive`→`success`, `negative`→`error`) + tolerate missing optional fields; (b) prompt hardening on the enum/required fields (helps both models); (c) **Sonnet fallback**: if a Haiku result fails quality checks (status≠complete, too few components, or excessive drops), retry the request on Sonnet.
+
+| idea | status | comps | uniq | dom% | layout | total_s |
+|------|--------|-------|------|------|--------|---------|
+| 1 | complete | 18 | 5 | 44 | data_layout | 48.5 |
+| 2 | complete | 27 | 7 | 48 | data_layout | 54.5 |
+| 3 | complete | 29 | 7 | 52 | data_layout | 60.8 |
+| 4 | complete | 33 | 5 | 64 | list_layout | 45.3 |
+| 5 | complete | 23 | 4 | 52 | list_layout | 44.4 |
+| 6 | complete | 27 | 5 | 52 | data_layout | 49.5 |
+| 7 | complete | 29 | 7 | 45 | data_layout | 52.4 |
+| 8 | complete | 23 | 7 | 39 | data_layout | 48.5 |
+| 9 | complete | 20 | 7 | 45 | data_layout | 49.2 |
+| 10 | complete | 24 | 7 | 46 | data_layout | 46.1 |
+
+---
+
 ## Phase B — Iteration log (future levers, if more latency needed)
-One lever per trial; re-run idea-1/2/3; compare latency AND quality vs baseline. Candidate levers: (1) route routine analyze+layout calls → Haiku-4.5 (keep heavy components on Sonnet per founder); (2) reduce/stream the heavy components call; (3) token+duration logging in `call_llm` to confirm token headroom.
+Latency is NOT model-bound (Haiku≈Sonnet). Real levers: (1) reduce the components call's output size / prompt; (2) **stream** progress to the UI (cuts perceived wait — service already supports SSE on `POST /`); (3) parallelize independent work. Model swap is a cost lever, not a latency one.
 
 | trial | lever | config | total_s (Δ vs base) | components | unique_types | quality_pass | fidelity vs base | verdict |
 |-------|-------|--------|---------------------|-----------|--------------|--------------|------------------|---------|
