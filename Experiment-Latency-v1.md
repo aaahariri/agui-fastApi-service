@@ -145,5 +145,12 @@ Latency is NOT model-bound (Haiku≈Sonnet). Real levers: (1) reduce the compone
 
 **Accept** a lever only if latency improves AND quality gates hold AND fidelity not degraded.
 
-## Final recommendation
-_(fill: chosen model routing + token settings + the data-derived caps: caller `AbortController` in `startup45-WebApp-v1/inngest/steps/analyze/call-generate.ts`, service `asyncio.wait_for` deadline, inner `httpx` timeout = p95 + margin. Then back-port to `Plan-Deployment-v1.md` Latency section.)_
+## Final recommendation (founder decision, 2026-06-02)
+
+- **Model: keep Sonnet-4** (`OPENROUTER_MODEL` unchanged). Haiku-4.5 gave only ~5–13% latency gain with measurably lower component reliability/variety; its only edge is cost, and latency is not model-bound. Not adopted.
+- **Shipped** (committed): dedup of the duplicate analyze call (≈14–20% faster) + metricRow build fix + layout_type now returned. Baseline `/generate` 57–83s → post-fix 49–67s.
+- **Latency caps: none set.** Latency is acceptable for the async/polling UX; not model-fixable. No `AbortController`/deadline/`httpx` cap applied (deferred). The real future levers, if ever needed, are **streaming progress to the UI** (service already supports SSE) or **reducing the components call output** — both model-independent, both deferred per founder ("ship what we have").
+- **Status: experiment closed.** No further changes.
+
+### Commits
+- `ad6497a` baseline checkpoint · `5bb2f7b` dedup + metricRow + layout_type fixes · `066cefe` Haiku 10-run experiment (data only, no code change).

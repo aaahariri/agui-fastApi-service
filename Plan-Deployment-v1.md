@@ -103,3 +103,6 @@ curl -s -X POST https://<railway-url>/api/generate \
 - Inner per-call `httpx` timeout lowered from 120s to fit the budget.
 
 **Hypotheses to validate (not yet decisions):** hard cap `/generate` ~45–60s; target p95 ~25–35s.
+
+### Outcome (2026-06-02 — see `Experiment-Latency-v1.md`)
+Experiment done. **Shipped:** analyze-call dedup (≈14–20% faster) + metricRow build fix + layout_type now returned → `/generate` 57–83s → 49–67s. **Model: kept Sonnet-4** (Haiku ≈ same speed across 10 runs + lower reliability; not adopted). **No latency caps set** — latency isn't model-bound and is acceptable for the async/polling UX; streaming/output-reduction deferred. Deploy this service to cloud as-is (above), set the two env vars, then resume INN-1101.
