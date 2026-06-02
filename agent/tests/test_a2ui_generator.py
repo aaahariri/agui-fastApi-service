@@ -1852,6 +1852,56 @@ class TestDataGenerators:
         assert parsed["type"] == "metricRow"
         assert parsed["props"]["status"] == "warning"
 
+    def test_generate_metric_row_metrics_array(self):
+        """Test MetricRow array form: props.metrics holds the row of metrics."""
+        row = generate_metric_row(
+            label="Key Metrics",
+            metrics=[
+                {"label": "حجم السوق", "value": "12", "unit": "B SAR"},
+                {"label": "النمو", "value": "18", "unit": "%"},
+                {"label": "المنافسون", "value": "5"},
+            ],
+        )
+
+        assert row.type == "metricRow"
+        assert row.props["label"] == "Key Metrics"
+        assert isinstance(row.props["metrics"], list)
+        assert len(row.props["metrics"]) == 3
+        assert row.props["metrics"][0] == {"label": "حجم السوق", "value": "12", "unit": "B SAR"}
+        # entry without a unit omits the unit key
+        assert "unit" not in row.props["metrics"][2]
+        # array form must not set a top-level single value
+        assert "value" not in row.props
+
+    def test_generate_metric_row_metrics_filters_invalid_entries(self):
+        """Test MetricRow array form drops entries missing label or value."""
+        row = generate_metric_row(
+            label="Mixed",
+            metrics=[
+                {"label": "ok", "value": "1"},
+                {"label": "no value"},
+                {"value": "no label"},
+                "not a dict",
+            ],
+        )
+
+        assert len(row.props["metrics"]) == 1
+        assert row.props["metrics"][0]["label"] == "ok"
+
+    def test_generate_metric_row_metrics_empty_raises(self):
+        """Test MetricRow array form raises when no valid entries remain."""
+        with pytest.raises(ValueError) as exc_info:
+            generate_metric_row(label="Empty", metrics=[{"label": "x"}])
+
+        assert "metrics" in str(exc_info.value)
+
+    def test_generate_metric_row_requires_value_or_metrics(self):
+        """Test MetricRow single form requires a value when no metrics array given."""
+        with pytest.raises(ValueError) as exc_info:
+            generate_metric_row(label="No data")
+
+        assert "value" in str(exc_info.value) or "metrics" in str(exc_info.value)
+
     # ProgressRing Tests
 
     def test_generate_progress_ring_basic(self):

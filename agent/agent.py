@@ -39,6 +39,10 @@ class DashboardState(BaseModel):
     content_analysis: dict[str, Any] = Field(default_factory=dict)
     layout_type: str = ""  # instructional, data, news, etc.
 
+    # Internal: raw LLM analysis cached by analyze_content() so generate_components()
+    # can reuse it (avoids a duplicate analyze LLM call). Excluded from serialized output.
+    analysis_cache: dict[str, Any] = Field(default_factory=dict, exclude=True)
+
     # Generated components (A2UI format)
     components: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -124,6 +128,8 @@ async def analyze_content(ctx: RunContext[StateDeps[DashboardState]]) -> StateSn
 
     # Get LLM analysis
     analysis = await analyze_content_with_llm(markdown)
+    # Cache the raw analysis so generate_components() can reuse it (skips a duplicate LLM analyze)
+    state.analysis_cache = analysis
 
     # Update state with results
     state.document_title = parsed.get("title", "Untitled")
@@ -168,9 +174,15 @@ async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> Sta
     state.progress = 50
     state.components = []  # Clear existing
 
-    # Generate components using the orchestrator
+    # Generate components using the orchestrator.
+    # Reuse the analysis from analyze_content() (dedup) and capture the selected layout.
     component_count = 0
-    async for component in orchestrate_dashboard_with_llm(state.markdown_content):
+    orchestrator_meta: dict[str, Any] = {}
+    async for component in orchestrate_dashboard_with_llm(
+        state.markdown_content,
+        content_analysis=state.analysis_cache or None,
+        meta=orchestrator_meta,
+    ):
         component_count += 1
 
         # Convert component to dict
@@ -189,6 +201,9 @@ async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> Sta
         state.current_step = f"Generated {component.type}"
 
         print(f"[TOOL] generate_components: added {component.type}")
+
+    # Persist the layout selected inside the orchestrator
+    state.layout_type = orchestrator_meta.get("layout_type", state.layout_type)
 
     # Final status
     state.status = "complete"

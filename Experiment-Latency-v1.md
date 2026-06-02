@@ -83,12 +83,28 @@ Run on local service (commit unchanged), model `anthropic/claude-sonnet-4` for A
 3. **`layout_type` lost:** layout is selected (`data_layout` per log) but the response `layout_type` is `""` — computed then not returned.
 4. Raw output leans on `bulletList` (max-consecutive 4–5, dominance 42–43%) → fails the service's variety gate on raw output, BUT the web app's `groupListComponents` (`call-generate.ts`) merges consecutive bullets, mitigating UX impact. Caveat, not a hard fail.
 
-**DECISION: baseline is NOT sufficient (latency) → Phase B recommended (pending founder go-ahead).** Newly discovered scope (dedup + 2 bugs) means Phase B scope needs confirmation before editing service code.
+**DECISION: baseline is NOT sufficient (latency) → Phase B.** Founder direction: keep Sonnet on the heavy components call; Step 1 = dedup + fix the 2 bugs (commit before/after).
 
 ---
 
-## Phase B — Iteration log (ONLY if needed; one lever per trial; re-run idea-1/2/3; compare vs baseline)
-Levers (in order): (0) add token+duration logging in `call_llm` [non-behavioral]; (1) route calls #1+#2 → Haiku-4.5, keep #3 → Sonnet-4; (2) lower #3 `max_tokens` toward observed p95; (3) trim prompts on #1/#2.
+## Phase B — Step 1: dedup duplicate analyze + fix metricRow + layout_type — 2026-06-02
+
+Model unchanged (all Sonnet-4). Changes: `agent.py` (cache raw analysis, pass it through, persist layout), `llm_orchestrator.py` (orchestrator reuses precomputed analysis, emits selected layout via `meta`), `a2ui_generator.py` (`generate_metric_row` accepts a `metrics` array). +4 unit tests; full suite 476 pass.
+
+| run | total_s baseline → postfix | Δ | components (b→p) | uniq (b→p) | layout_type (b→p) | metricRow build fails (b→p) |
+|-----|----------------------------|-----|------------------|-----------|-------------------|-----------------------------|
+| idea-1 | 56.7 → **48.7** | −14% | 19→16 | 8→8 | `""` → `data_layout` ✅ | 1 → **0** ✅ |
+| idea-2 | 73.5 → **62.9** | −14% | 17→20 | 7→7 | `""` → `data_layout` ✅ | 1 → **0** ✅ |
+| idea-3 | 83.5 → **67.1** | −20% | 21→22 | 6→9 | `""` → `data_layout` ✅ | 2 → **0** ✅ (1 metricRow now survives) |
+
+**Verification (post-fix log):** "Analyzing content" = 3 total (1/run, was 2/run) + 3 "Reusing precomputed content analysis" → **dedup confirmed**. "Failed to build metricRow" = **0** (was 4). All runs return `data_layout`.
+
+**Outcome:** latency −14–20% (the dedup), both pre-existing quality bugs fixed, no quality regression (component/variety deltas are LLM nondeterminism at temp 0.4/0.7; raw `max_consecutive`/`dominance` are further mitigated by the web app's `groupListComponents`). Heavy components call (Sonnet, ~29–52s) remains the dominant cost → candidate for a future step (route routine analyze+layout to Haiku; reduce/stream the heavy call) if more latency is needed.
+
+---
+
+## Phase B — Iteration log (future levers, if more latency needed)
+One lever per trial; re-run idea-1/2/3; compare latency AND quality vs baseline. Candidate levers: (1) route routine analyze+layout calls → Haiku-4.5 (keep heavy components on Sonnet per founder); (2) reduce/stream the heavy components call; (3) token+duration logging in `call_llm` to confirm token headroom.
 
 | trial | lever | config | total_s (Δ vs base) | components | unique_types | quality_pass | fidelity vs base | verdict |
 |-------|-------|--------|---------------------|-----------|--------------|--------------|------------------|---------|

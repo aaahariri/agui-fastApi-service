@@ -1144,9 +1144,10 @@ def generate_stat_card(
 
 def generate_metric_row(
     label: str,
-    value: str,
+    value: str | None = None,
     unit: str | None = None,
-    status: str | None = None
+    status: str | None = None,
+    metrics: list[dict] | None = None,
 ) -> A2UIComponent:
     """
     Generate a MetricRow A2UI component for displaying key metrics.
@@ -1189,6 +1190,36 @@ def generate_metric_row(
         ...     status="warning"
         ... )
     """
+    # Multi-metric row (array form): props = {"metrics": [{label, value, unit?}, ...]}
+    # Consumers (frontend MetricRow, webapp expandMetricRow) read props.metrics.
+    if metrics is not None:
+        normalized: list[dict] = []
+        for m in metrics:
+            if not isinstance(m, dict):
+                continue
+            m_label = m.get("label")
+            m_value = m.get("value")
+            if m_label is None or m_value is None:
+                continue
+            entry: dict = {"label": m_label, "value": m_value}
+            if m.get("unit"):
+                entry["unit"] = m["unit"]
+            normalized.append(entry)
+        if not normalized:
+            raise ValueError(
+                "generate_metric_row: 'metrics' had no valid entries (each needs label and value)"
+            )
+        row_props: dict = {"metrics": normalized}
+        if label:
+            row_props["label"] = label
+        return generate_component("metricRow", row_props)
+
+    # Single-metric row (label + value)
+    if value is None:
+        raise ValueError(
+            "generate_metric_row requires 'value' (single metric) or 'metrics' (array)"
+        )
+
     # Validate status if provided
     if status:
         valid_statuses = {"good", "warning", "critical", "neutral"}

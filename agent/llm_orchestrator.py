@@ -806,7 +806,11 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
         return None
 
 
-async def orchestrate_dashboard_with_llm(markdown_content: str) -> AsyncGenerator[A2UIComponent, None]:
+async def orchestrate_dashboard_with_llm(
+    markdown_content: str,
+    content_analysis: dict | None = None,
+    meta: dict | None = None,
+) -> AsyncGenerator[A2UIComponent, None]:
     """
     Main orchestration function that uses LLM to generate dashboard components.
 
@@ -832,8 +836,11 @@ async def orchestrate_dashboard_with_llm(markdown_content: str) -> AsyncGenerato
     logger.info(f"[PARSE] Sections: {len(parsed.get('sections', []))}")
     logger.info(f"[PARSE] Code blocks: {len(parsed.get('code_blocks', []))}")
 
-    # Step 2: Analyze content with LLM
-    content_analysis = await analyze_content_with_llm(markdown_content)
+    # Step 2: Analyze content with LLM (reuse precomputed analysis if provided — avoids a duplicate call)
+    if content_analysis is None:
+        content_analysis = await analyze_content_with_llm(markdown_content)
+    else:
+        logger.info("[ORCHESTRATOR] Reusing precomputed content analysis (skipped duplicate LLM analyze)")
 
     # Merge parsed data with LLM analysis
     full_analysis = {
@@ -848,6 +855,8 @@ async def orchestrate_dashboard_with_llm(markdown_content: str) -> AsyncGenerato
 
     # Step 3: Select layout with LLM
     layout_decision = await select_layout_with_llm(full_analysis)
+    if meta is not None:
+        meta["layout_type"] = layout_decision.get("layout_type", "")
 
     # Step 4: Select components with LLM
     component_specs = await select_components_with_llm(
