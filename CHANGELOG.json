@@ -1,0 +1,35 @@
+{
+  "entries": [
+    {
+      "date": "2026-06-02",
+      "type": "fix",
+      "severity": "medium",
+      "commit": "5bb2f7b",
+      "title": "fix(/generate): dedup duplicate analyze call + metricRow build + return layout_type",
+      "description": "Three fixes to POST /api/generate (the markdown -> A2UI dashboard-components transformer used by the Startup45 analyze pipeline). (1) DEDUP: the analyze_content agent tool and orchestrate_dashboard_with_llm each called analyze_content_with_llm on the same markdown (2 analyze LLM calls per request). The raw analysis is now cached on DashboardState.analysis_cache (excluded from serialized output) by analyze_content() and passed into the orchestrator, which reuses it (falls back to analyzing if not provided). Result: 1 analyze/request -> /api/generate ~14-20% faster (57-83s -> 49-67s measured on 3 Arabic inputs, Sonnet-4). (2) metricRow BUILD BUG: build_a2ui_component called generate_metric_row(label=..., metrics=[...]) for the multi-metric array form, but the builder only accepted a single (label, value) -> EVERY metricRow with a metrics array raised 'unexpected keyword argument metrics' and was silently dropped. generate_metric_row now accepts an optional metrics array and emits props.metrics=[{label,value,unit?}] (matches the frontend MetricRow component + the webapp's expandMetricRow). 0 build failures post-fix (was 4 across the benchmark). (3) layout_type: the orchestrator selected a layout (e.g. data_layout) but it was never returned -> response layout_type was empty. It is now surfaced from the orchestrator via a meta out-param and persisted onto state.layout_type. Tests: +4 generate_metric_row array-form tests; 587 pure-unit tests pass (live-LLM orchestrator/endpoint tests excluded).",
+      "linear": ["INN-1101", "INN-1089"],
+      "files": [
+        "agent/agent.py — DashboardState.analysis_cache (exclude=True); analyze_content() caches raw analysis; generate_components() passes it through + persists layout_type",
+        "agent/llm_orchestrator.py — orchestrate_dashboard_with_llm(content_analysis, meta): reuse precomputed analysis, emit selected layout via meta",
+        "agent/a2ui_generator.py — generate_metric_row accepts a metrics array -> props.metrics",
+        "agent/tests/test_a2ui_generator.py — +4 metrics-array tests"
+      ],
+      "status": "Done"
+    },
+    {
+      "date": "2026-06-02",
+      "type": "test",
+      "severity": "low",
+      "commit": "066cefe (data) / 0303708 (conclusion) / ad6497a (baseline)",
+      "title": "test(/generate): Haiku-4.5 vs Sonnet-4 latency/quality experiment (10 runs) — kept Sonnet",
+      "description": "Latency experiment on /api/generate across 10 distinct Arabic market-analysis inputs (agent/experiments/inputs/idea-1..10.md), recorded in Experiment-Latency-v1.md (now the hub doc for /generate model experiments). Ran all LLM calls on anthropic/claude-haiku-4.5 via shell override OPENROUTER_MODEL=... (.env untouched; load_dotenv(override=False) lets the shell win). Findings: Haiku was only ~5-13% faster than Sonnet-4 (mean 49.9s) — a direct OpenRouter probe showed ~1.5x/token, NOT the expected 5-10x, so latency is dominated by fixed overhead + generation and is NOT model-bound. Consistency was fine (10/10 complete, layout set, >=4 unique types) but quality was lower than Sonnet: invalid calloutCard enum (type:positive), dropped vsCard/stepCard (missing required fields), higher single-type dominance. DECISION (founder): keep Sonnet-4; the model swap is a cost lever (~1/3 $/token), not a latency one. No latency caps set; streaming-to-UI / output-reduction are the real future levers (deferred). 3 LLM calls/request (post-dedup): analyze (4k tok) -> layout (4k) -> components (16k max, the dominant ~29-52s call), each httpx timeout 120s.",
+      "linear": ["INN-1101"],
+      "files": [
+        "Experiment-Latency-v1.md — experiment hub + full results/verdict",
+        "Plan-Deployment-v1.md — cloud-deploy plan (Railway) + latency-budget section",
+        "agent/experiments/inputs/idea-1..10.md, agent/experiments/runs/*.json"
+      ],
+      "status": "Done"
+    }
+  ]
+}
