@@ -66,9 +66,9 @@ from prompts import (
 # Load environment variables
 load_dotenv()
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# OpenRouter attributes usage/rate-limits by HTTP-Referer; override per-deploy via env.
+OPENROUTER_REFERER = os.getenv("OPENROUTER_REFERER", "https://www.pearlhq.app")
 
 # Default semantic zones for each component type
 # These are used when the LLM doesn't specify a zone
@@ -138,7 +138,10 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
     Returns:
         The LLM response text
     """
-    if not OPENROUTER_API_KEY:
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
+
+    if not api_key:
         raise ValueError("OPENROUTER_API_KEY not set in environment")
 
     messages = []
@@ -150,13 +153,13 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
         response = await client.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
             headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:3010",
+                "HTTP-Referer": OPENROUTER_REFERER,
                 "X-Title": "Second Brain Research Dashboard",
             },
             json={
-                "model": OPENROUTER_MODEL,
+                "model": model,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,

@@ -16,6 +16,7 @@ A2UI Protocol Compliance:
 import uuid
 import json
 import re
+from contextvars import ContextVar
 from typing import Any, AsyncGenerator
 from pydantic import BaseModel, Field, field_validator
 
@@ -200,8 +201,9 @@ VALID_COMPONENT_TYPES = {
 }
 
 
-# ID counter for sequential IDs within a session
-_id_counter = 0
+# Per-request ID counter using ContextVar so concurrent async requests each
+# maintain their own isolated counter (no cross-request ID collisions).
+_id_counter: ContextVar[int] = ContextVar("_id_counter", default=0)
 
 
 def generate_id(component_type: str, prefix: str | None = None) -> str:
@@ -231,17 +233,17 @@ def generate_id(component_type: str, prefix: str | None = None) -> str:
         >>> generate_id("tldr")
         "tldr-1"
     """
-    global _id_counter
-    _id_counter += 1
+    counter = _id_counter.get() + 1
+    _id_counter.set(counter)
 
     if prefix:
-        return f"{prefix}-{_id_counter}"
+        return f"{prefix}-{counter}"
 
     # Strip legacy a2ui. prefix if present, then convert camelCase/PascalCase to kebab-case
     if component_type:
         name = component_type.replace("a2ui.", "")
         kebab_name = ''.join(['-' + c.lower() if c.isupper() else c for c in name]).lstrip('-')
-        return f"{kebab_name}-{_id_counter}"
+        return f"{kebab_name}-{counter}"
 
     # Fallback to UUID
     return f"component-{uuid.uuid4().hex[:8]}"
@@ -249,13 +251,12 @@ def generate_id(component_type: str, prefix: str | None = None) -> str:
 
 def reset_id_counter():
     """
-    Reset the global ID counter.
+    Reset the per-request ID counter.
 
     Useful for testing or when starting a new component generation session.
-    This ensures IDs start from 1 again.
+    This ensures IDs start from 1 again within the current async context.
     """
-    global _id_counter
-    _id_counter = 0
+    _id_counter.set(0)
 
 
 def generate_component(

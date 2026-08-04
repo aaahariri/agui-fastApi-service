@@ -1,0 +1,51 @@
+# Version control
+.git
+.gitignore
+
+# Virtual environments — the image builds its own
+.venv/
+venv/
+env/
+
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+
+# uv local state (NOT uv.lock — that is required for --frozen)
+.python-version
+
+# Tests / benchmarks / experiments (not needed at runtime)
+tests/
+.pytest_cache/
+.benchmarks/
+.coverage
+htmlcov/
+experiments/
+
+# Runtime-generated logs
+logs/
+*.log
+
+# Secrets — must come from Railway env vars, never baked into the image
+.env
+.env.local
+.env.*
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Docs (not needed at runtime)
+*.md
+README*

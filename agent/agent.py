@@ -14,7 +14,6 @@ from textwrap import dedent
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.ag_ui import StateDeps
-from pydantic_ai.models.openai import OpenAIModel
 from ag_ui.core import EventType, StateSnapshotEvent
 
 # Load environment variables
@@ -58,19 +57,16 @@ class DashboardState(BaseModel):
     error_message: str | None = None
 
 
-def create_openrouter_model() -> OpenAIModel:
-    """Create OpenRouter model instance."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY environment variable required")
-
-    model_name = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
-    return OpenAIModel(model_name, provider='openrouter')
+# Model name is resolved from env; the model itself is built lazily on the first
+# request (defer_model_check=True) so a missing OPENROUTER_API_KEY fails cleanly
+# per-request instead of crashing the container at import (no boot crash-loop).
+_MODEL_NAME = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
 
 
 # Create the agent with StateDeps for AG-UI integration
 agent = Agent(
-    model=create_openrouter_model(),
+    model=f"openrouter:{_MODEL_NAME}",
+    defer_model_check=True,
     deps_type=StateDeps[DashboardState],
     system_prompt=dedent("""
         You are a specialized AI assistant that transforms Markdown research documents

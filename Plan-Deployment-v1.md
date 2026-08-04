@@ -2,7 +2,7 @@
 
 **Goal:** Get this service reachable over HTTPS so the Startup45 web app's analyze `/generate` step can call it in prod. Today it runs local-only → prod analyze is down (dies at `/generate`).
 
-**Status:** not deployed. No Dockerfile exists. Host = **Railway** (decision below).
+**Status:** code-ready, not yet deployed. Dockerfile exists, local Docker test passed. Host = **Railway**. See [Progress & Pending](#progress--pending-2026-06-07) for the live checklist.
 
 ---
 
@@ -106,3 +106,25 @@ curl -s -X POST https://<railway-url>/api/generate \
 
 ### Outcome (2026-06-02 — see `Experiment-Latency-v1.md`)
 Experiment done. **Shipped:** analyze-call dedup (≈14–20% faster) + metricRow build fix + layout_type now returned → `/generate` 57–83s → 49–67s. **Model: kept Sonnet-4** (Haiku ≈ same speed across 10 runs + lower reliability; not adopted). **No latency caps set** — latency isn't model-bound and is acceptable for the async/polling UX; streaming/output-reduction deferred. Deploy this service to cloud as-is (above), set the two env vars, then resume INN-1101.
+
+---
+
+## Progress & Pending (2026-06-07)
+
+**Done — code-ready (uncommitted):**
+- [x] `agent/Dockerfile` + `.dockerignore` — 2-stage, `uv sync --frozen`, binds `$PORT`, keep-alive 130s, `/health` check. Build OK 568MB.
+- [x] Crash-fix: `agent.py` lazy model (`model="openrouter:…"`, `defer_model_check=True`) → boots without key, no crash-loop.
+- [x] Lean logging: `logger.py` stdout-only; file handler gated behind `LOG_FILE` env (rely on Railway log capture, ephemeral disk).
+- [x] Model unified → `anthropic/claude-sonnet-4.6` in `agent.py` + `llm_orchestrator.py` (no Haiku on generation). Fallback: `openai/gpt-5`.
+- [x] Hardening: `on_event`→`lifespan`; `_id_counter`→`ContextVar` (per-request); OpenRouter key/model + `HTTP-Referer` read at call-time via env.
+- [x] Verified: import OK w/o key · 587 tests pass · local Docker e2e = 18 components, clean 500 on no-key, container stays UP.
+
+**Pending — user/config (blocks go-live):**
+- [ ] Rotate `OPENROUTER_API_KEY` + `API_KEY` (currently in `agent/.env` on disk).
+- [ ] Railway: **Root Directory=`agent`**, Healthcheck=`/health`; set `OPENROUTER_API_KEY`, `API_KEY`, `ALLOWED_ORIGINS=https://www.pearlhq.app`. `OPENROUTER_MODEL` optional (defaults to sonnet-4.6).
+- [ ] Deploy via Railway MCP (**needs fresh session** — MCP not loaded when this work was done).
+- [ ] Hand off public URL + `API_KEY` → web app `PYDANTIC_AI_AG_UI_SERVICE_URL`/`_API_KEY` (Vercel prod), resume INN-1101.
+
+**Optional / deferred:**
+- [ ] Enable `reasoning:{effort:high}` on OpenRouter call (deeper thinking; +latency).
+- [ ] Fix pre-existing test `test_response_contains_all_state_fields` (asserts `analysis_cache`, which is `exclude=True`).

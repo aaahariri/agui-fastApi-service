@@ -8,6 +8,7 @@ for bidirectional state synchronization and streaming agent responses.
 import os
 import re
 import json
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 # Load environment variables first
@@ -132,8 +133,33 @@ _base_ag_ui_app = agent.to_ag_ui(
     deps=StateDeps(DashboardState()),
 )
 
+@asynccontextmanager
+async def lifespan(app):
+    """Lifespan context manager — replaces deprecated @app.on_event('startup')."""
+    log_path = reset_log_file()
+    if log_path:
+        logger.info(f"Logging to stdout + file: {log_path}")
+    else:
+        logger.info("Logging to stdout only")
+    # Reflect the actual bound port (the host injects $PORT, e.g. Railway).
+    port = os.getenv("PORT", str(BACKEND_PORT))
+    logger.info(f"Second Brain Agent (AG-UI) starting on port {port}")
+    logger.info(f"AG-UI endpoint: POST http://localhost:{port}/")
+    logger.info(f"Sync endpoint: POST http://localhost:{port}/api/generate")
+    logger.info(f"Info endpoint: GET http://localhost:{port}/info")
+    logger.info(f"Health endpoint: GET http://localhost:{port}/health")
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        logger.warning("OPENROUTER_API_KEY not set")
+    else:
+        logger.info("OpenRouter API key configured")
+
+    yield
+
+
 # Create our wrapper app
-app = Starlette()
+app = Starlette(lifespan=lifespan)
 
 # AG-UI POST endpoint with event type transformation
 async def ag_ui_endpoint(request: Request):
@@ -297,23 +323,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.on_event("startup")
-async def startup():
-    """Startup event handler."""
-    log_path = reset_log_file()
-    logger.info(f"Log file reset: {log_path}")
-    logger.info(f"Second Brain Agent (AG-UI) starting on port {BACKEND_PORT}")
-    logger.info(f"AG-UI endpoint: POST http://localhost:{BACKEND_PORT}/")
-    logger.info(f"Sync endpoint: POST http://localhost:{BACKEND_PORT}/api/generate")
-    logger.info(f"Info endpoint: GET http://localhost:{BACKEND_PORT}/info")
-    logger.info(f"Health endpoint: GET http://localhost:{BACKEND_PORT}/health")
-
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        logger.warning("OPENROUTER_API_KEY not set")
-    else:
-        logger.info("OpenRouter API key configured")
 
 
 if __name__ == "__main__":
