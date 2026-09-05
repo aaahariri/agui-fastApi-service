@@ -284,6 +284,103 @@ Your task is to select and configure the OPTIMAL set of A2UI components to repre
 - **linkPreview**: External links, references, resources
 - **profileCard**: Author profiles, contributors, experts
 
+### Diagram & Chart Components
+- **figureBlock**: A diagram or chart — a quantity compared across categories, a
+  trend over time, an ordered process, or a drop-off funnel. Use it when the shape
+  of the data IS the point and a table or paragraph would bury it. Always
+  `width_hint: "full"` — it renders full width in its own row. See the figureBlock
+  section below for its props; it is the one component whose props are a strict
+  schema.
+
+### figureBlock Props (STRICT SCHEMA)
+
+Send a structured spec. **Never send SVG, an image, or markup** — the app renders
+the drawing from your spec, which is what keeps every figure on-brand, readable in
+light and dark, and correct in right-to-left layouts. A spec that does not validate
+is dropped silently, so match this shape exactly.
+
+```json
+{{
+  "component_type": "figureBlock",
+  "zone": "content",
+  "priority": "high",
+  "props": {{
+    "width_hint": "full",
+    "title": "Events ingested per quarter",
+    "caption": "Figure 2 - quarterly ingest volume, in millions of events.",
+    "spec": {{
+      "kind": "bar",
+      "title": "Events ingested per quarter",
+      "eyebrow": "THROUGHPUT",
+      "takeaway": "Q1 2026 is the first quarter above 90M",
+      "dir": "ltr",
+      "focus": 4,
+      "unit": "M",
+      "items": [
+        {{"label": "Q1 '25", "value": 42}},
+        {{"label": "Q2 '25", "value": 58}},
+        {{"label": "Q3 '25", "value": 51}},
+        {{"label": "Q4 '25", "value": 74}},
+        {{"label": "Q1 '26", "value": 96}}
+      ]
+    }}
+  }}
+}}
+```
+
+**kind** - pick the one that matches the data:
+- `"bar"` - quantities compared across categories. 2-8 items.
+- `"line"` - a trend over ordered points. 3-24 items.
+- `"flow"` - an ordered process, arrow between each stage. 2-5 items, each
+  `{{"label": "Transform", "tag": "COMPUTE", "sub": "normalize - enrich"}}`
+  (`tag` and `sub` optional).
+- `"funnel"` - successive drop-off. 2-6 items; the drop percentage is computed
+  for you, do not put it in a label.
+
+**Fields**
+- `title` (required) - the figure's headline; also its accessible name.
+- `eyebrow` - a short all-caps section tag. Optional.
+- `takeaway` - ONE line stating the finding, not the axis names. "p95 more than
+  halved after the cutover", never "latency by month". Optional but wanted.
+- `dir` - `"ltr"` (default) or `"rtl"`. Use `"rtl"` for Arabic content; the layout
+  mirrors and the value axis moves to the right.
+- `focus` - 0-based index of the ONE item to accent. This is what the reader looks
+  at first. Omit rather than accent several; accenting everything accents nothing.
+- `unit` - short suffix on values, e.g. `"M"` or `" ms"`. Optional.
+
+**Optional interactivity — use it when a figure has more to say than fits**
+
+Any item may carry `tip` and/or `detail`. They cost nothing when absent: a figure
+without them stays completely static. Add them when a stage or bar has a number,
+caveat or definition worth surfacing without cluttering the drawing.
+
+- `"tip"` - short text shown on hover and keyboard focus. Keep under ~60
+  characters: a value, a rate, a unit. e.g. `"42M events/mo"`, `"p95 18ms"`.
+- `"detail"` - a longer explanation, shown in a panel when the reader clicks that
+  item. One or two sentences. e.g. `"Two intakes: a signed webhook for realtime
+  traffic, and a nightly batch replay that backfills anything the webhook dropped."`
+- `"tipSvgRef"` - RARE. The id of another item in this same figure whose mini-view
+  is shown as the tooltip instead of text, for when the supporting detail is itself
+  a small picture. Only use it when a drawing genuinely says more than a sentence
+  would; a number or a caveat belongs in `tip`.
+
+```json
+"items": [
+  {{"label": "Ingest", "tag": "SOURCE", "sub": "webhook - batch",
+    "tip": "42M events/mo",
+    "detail": "A signed webhook for realtime traffic, plus a nightly batch replay."}},
+  {{"label": "Transform", "tag": "COMPUTE", "sub": "normalize - enrich",
+    "tip": "p95 18ms"}}
+]
+```
+
+Prefer putting a supporting number in `tip` over adding it to the `label` - labels
+stay short and the figure stays legible.
+
+**Do not** put chart junk in labels (no "(%)", no "- 42M"), do not exceed the item
+limits above (split into two figures instead), and do not emit a figureBlock for
+data with fewer than two points.
+
 ### URL Requirements (CRITICAL)
 For any component with a URL (linkPreview):
 - **ONLY use complete, absolute URLs** starting with `https://`
@@ -326,7 +423,7 @@ You MUST follow these rules to ensure thorough content representation:
 
 ### Rule 6: Width Hints
 For each component, you may suggest a `width_hint` in the props to control layout:
-- **"full"**: Spans entire width - use for code blocks, tables, summaries, executive content
+- **"full"**: Spans entire width - use for code blocks, tables, summaries, executive content, figureBlock (figureBlock is ALWAYS full)
 - **"half"**: Half width (2 columns on desktop) - use for callouts, key points, quotes
 - **"third"**: Third width (3 columns on desktop) - use for stat cards, link cards, repo cards
 - **"quarter"**: Small items - use for badges, tags
@@ -339,7 +436,7 @@ Assign each component to a semantic zone for intelligent layout:
 - **"hero"**: Top of page, full-width prominent content. Use for: tldr, headlineCard
 - **"metrics"**: Key statistics and data. Use for: statCard, metricRow
 - **"insights"**: Main content area. Use for: keyTakeaways, calloutCard, quoteCard
-- **"content"**: Primary detailed content. Use for: codeBlock, dataTable, stepCard, bulletList, comparisonTable, vsCard
+- **"content"**: Primary detailed content. Use for: codeBlock, dataTable, stepCard, bulletList, comparisonTable, vsCard, figureBlock
 - **"resources"**: Links and references. Use for: linkPreview, profileCard
 
 Components in the same zone will be grouped together visually. Use zones to create a clear visual hierarchy.
@@ -461,6 +558,7 @@ Return a JSON array of component specifications:
     {{"component_type": "keyTakeaways", "zone": "insights", "priority": "medium", "props": {{"width_hint": "half"}}}},
     {{"component_type": "calloutCard", "zone": "insights", "priority": "medium", "props": {{"width_hint": "half"}}}},
     {{"component_type": "codeBlock", "zone": "content", "priority": "high", "props": {{"width_hint": "full"}}}},
+    {{"component_type": "figureBlock", "zone": "content", "priority": "high", "props": {{"width_hint": "full", "title": "Events ingested per quarter", "spec": {{"kind": "bar", "title": "Events ingested per quarter", "takeaway": "Q1 2026 is the first quarter above 90M", "focus": 2, "unit": "M", "items": [{{"label": "Q3 '25", "value": 51}}, {{"label": "Q4 '25", "value": 74}}, {{"label": "Q1 '26", "value": 96, "tip": "96M events"}}]}}}}}},
     {{"component_type": "stepCard", "zone": "content", "priority": "high", "props": {{"width_hint": "full"}}}},
     {{"component_type": "linkPreview", "zone": "resources", "priority": "medium", "props": {{"width_hint": "third"}}}},
     {{"component_type": "profileCard", "zone": "resources", "priority": "medium", "props": {{"width_hint": "third"}}}}

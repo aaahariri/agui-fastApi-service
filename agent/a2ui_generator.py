@@ -198,6 +198,13 @@ VALID_COMPONENT_TYPES = {
     # Resource & People
     "linkPreview",
     "profileCard",
+
+    # Diagrams & Charts
+    # Emits a FigureSpec, NOT SVG — the Next.js app renders it
+    # (lib/editor/figures/render-figure.ts). Keeping the model out of the SVG is
+    # what guarantees the figure obeys the design rules: a model that forgets one
+    # still produces a spec that renders correctly.
+    "figureBlock",
 }
 
 
