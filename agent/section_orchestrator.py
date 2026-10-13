@@ -174,12 +174,43 @@ def _bullet_list(texts: list[str]) -> A2UIComponent:
     )
 
 
+_TABLE_BLOCK_RE = re.compile(r"(?:^[ \t]*\|.*\|[ \t]*\n?){3,}", re.MULTILINE)
+
+
+def _split_cells(line: str) -> list[str]:
+    return [c.replace("\\|", "|").strip() for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
+
+
+def _table_components(body: str, component_tokens: list[set[str]]) -> tuple[str, list[A2UIComponent]]:
+    """
+    Pull markdown tables (header, separator, rows) out of the body. A table no component already
+    covers becomes ONE dataTable (every cell kept); covered tables are just removed from the body.
+    """
+    tables: list[A2UIComponent] = []
+
+    def take(match: re.Match[str]) -> str:
+        lines = [ln for ln in match.group(0).splitlines() if ln.strip()]
+        if not re.fullmatch(r"[|\s:-]+", lines[1].strip()):
+            return match.group(0)  # not a real table: leave rows to the item path
+        headers = _split_cells(lines[0])
+        rows = [(_split_cells(ln) + [""] * len(headers))[: len(headers)] for ln in lines[2:]]
+        if not _is_covered(" ".join(c for row in rows for c in row), component_tokens):
+            tables.append(A2UIComponent(
+                type="dataTable", id="data-table", props={"headers": headers, "rows": rows}, zone="content",
+            ))
+        return "\n"
+
+    return _TABLE_BLOCK_RE.sub(take, body), tables
+
+
 def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UIComponent]:
     """
-    Gap-fill for source text no component covers. Items carrying evidence are kept verbatim in
-    ONE bulletList; the remaining uncovered items are merged in full (never cut) into a second one.
+    Gap-fill for source text no component covers. Markdown tables become a dataTable; items carrying
+    evidence are kept verbatim in ONE bulletList; the remaining uncovered items are merged in full
+    (never cut) into a second one.
     """
     component_tokens = [_tokens(_component_text(c)) for c in built]
+    body, tables = _table_components(body, component_tokens)
     evidence: list[str] = []
     rest: list[str] = []
     for _, text in extract_source_items(body):
@@ -189,7 +220,7 @@ def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UICompo
             evidence.append(_plain(text))
         else:
             rest.append(_plain(text))
-    return [_bullet_list(items) for items in (evidence, rest) if items]
+    return [*tables, *(_bullet_list(items) for items in (evidence, rest) if items)]
 
 
 async def _build_section(

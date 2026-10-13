@@ -122,14 +122,22 @@ async def test_orchestrate_sections_keeps_llm_components_between_heading_and_gap
     assert first == ["heading", "calloutCard", "bulletList"]
 
 
-def test_gap_fill_never_truncates_and_keeps_table_rows():
+def test_gap_fill_never_truncates_and_turns_tables_into_data_table():
     long_prose = "word " * 100 + "ends here."
-    body = f"{long_prose}\n\n| Name | Value |\n|---|---|\n| plain | none |"
+    body = f"{long_prose}\n\n| Name | Value |\n|---|---|\n| plain | 5 \\| 6 |\n| other | 7 |"
     out = coverage_components(body, [])
-    texts = [i["text"] for c in out for i in c.props["items"]]
+    table = next(c for c in out if c.type == "dataTable")
+    assert table.props["headers"] == ["Name", "Value"]
+    assert table.props["rows"] == [["plain", "5 | 6"], ["other", "7"]]
+    texts = [i["text"] for c in out if c.type == "bulletList" for i in c.props["items"]]
     assert long_prose.strip() in texts
-    assert "| plain | none |" in texts and "| Name | Value |" in texts
-    assert not any("---" in t for t in texts)
+    assert not any(t.startswith("|") or "---" in t for t in texts)
+
+
+def test_covered_table_is_not_duplicated():
+    body = "| Name | Value |\n|---|---|\n| Acme | 12 |"
+    built = [A2UIComponent(type="dataTable", id="x", props={"headers": ["Name", "Value"], "rows": [["Acme", "12"]]}, zone="content")]
+    assert coverage_components(body, built) == []
 
 
 def test_gap_fill_keeps_evidence_verbatim_and_merges_the_rest():
