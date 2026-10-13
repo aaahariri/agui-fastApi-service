@@ -256,6 +256,12 @@ async def sync_generate_endpoint(request: Request):
         print(f"[SYNC ERROR] {e}", flush=True)
         import traceback
         traceback.print_exc()
+        if "maximum context length" in str(e):
+            # Reason: a clear client error instead of an opaque provider 400 wrapped in a 500.
+            return JSONResponse(
+                {"error": "Document is too large for the model context window; split it into smaller documents."},
+                status_code=422,
+            )
         return JSONResponse({"error": str(e)}, status_code=500)
 
     return JSONResponse(state.model_dump())

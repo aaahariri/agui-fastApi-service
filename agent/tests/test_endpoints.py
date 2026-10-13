@@ -190,3 +190,13 @@ class TestSyncGenerateEndpoint:
         prompt = call_args[0][0]
         assert "Special Content" in prompt
         assert "Very unique text." in prompt
+
+
+class TestContextOverflowError:
+    def test_context_limit_error_is_422_with_clear_message(self):
+        err = RuntimeError("status_code: 400, body: {'message': \"This endpoint's maximum context length is 200000 tokens.\"}")
+        with patch("main.agent") as mock_agent:
+            mock_agent.run = AsyncMock(side_effect=err)
+            response = TestClient(app).post("/api/generate", json={"markdown_content": "# T\n\ntext"})
+        assert response.status_code == 422
+        assert "too large" in response.json()["error"]

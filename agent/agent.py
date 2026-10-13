@@ -13,6 +13,7 @@ from textwrap import dedent
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import ToolReturn
 from pydantic_ai.ag_ui import StateDeps
 from ag_ui.core import EventType, StateSnapshotEvent
 
@@ -86,6 +87,21 @@ agent = Agent(
 )
 
 
+def _tool_result(state: DashboardState, summary: str) -> ToolReturn:
+    """
+    Tool result: a one-line summary for the model, the full state snapshot for the AG-UI stream.
+
+    Reason: a StateSnapshotEvent returned directly is also serialised into the model's history; it
+    embeds state.markdown_content, so each tool call re-sent the whole report (+components) to the
+    model and a 120k-char Arabic report exceeded the 200k-token context (HTTP 500). The AG-UI event
+    stream reads `metadata` first, so the frontend still receives the snapshot.
+    """
+    return ToolReturn(
+        return_value=summary,
+        metadata=StateSnapshotEvent(type=EventType.STATE_SNAPSHOT, snapshot=state),
+    )
+
+
 @agent.tool
 def get_markdown_content(ctx: RunContext[StateDeps[DashboardState]]) -> str:
     """Get the current markdown content from state."""
@@ -101,7 +117,7 @@ def get_markdown_content(ctx: RunContext[StateDeps[DashboardState]]) -> str:
 
 
 @agent.tool
-async def analyze_content(ctx: RunContext[StateDeps[DashboardState]]) -> StateSnapshotEvent:
+async def analyze_content(ctx: RunContext[StateDeps[DashboardState]]) -> ToolReturn:
     """
     Analyze the markdown content to determine document type and extract key elements.
     Updates the shared state with analysis results.
@@ -151,15 +167,11 @@ async def analyze_content(ctx: RunContext[StateDeps[DashboardState]]) -> StateSn
 
     print(f"[TOOL] analyze_content: document_type={state.document_type}")
 
-    # Return StateSnapshotEvent to sync state with frontend
-    return StateSnapshotEvent(
-        type=EventType.STATE_SNAPSHOT,
-        snapshot=state,
-    )
+    return _tool_result(state, f"Analysis complete: {state.document_type}")
 
 
 @agent.tool
-async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> StateSnapshotEvent:
+async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> ToolReturn:
     """
     Generate A2UI dashboard components based on the analyzed content.
     Each component is added to state and synced with the frontend.
@@ -220,8 +232,4 @@ async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> Sta
 
     print(f"[TOOL] generate_components: complete with {component_count} components")
 
-    # Return StateSnapshotEvent to sync final state with frontend
-    return StateSnapshotEvent(
-        type=EventType.STATE_SNAPSHOT,
-        snapshot=state,
-    )
+    return _tool_result(state, f"Generated {component_count} components")
