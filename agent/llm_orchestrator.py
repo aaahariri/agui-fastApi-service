@@ -6,12 +6,14 @@ using OpenRouter API to intelligently select and generate A2UI components based
 on the content analysis.
 """
 
+import asyncio
 import os
 import json
 import re
 from typing import AsyncGenerator
 import httpx
 from dotenv import load_dotenv
+from section_orchestrator import should_use_section_path, orchestrate_sections
 
 from a2ui_generator import (
     A2UIComponent,
@@ -344,10 +346,63 @@ Always respond with valid JSON only, no additional text."""
     return result
 
 
+TARGET_INPUT_CHARS = 30000
+HARD_MAX_INPUT_CHARS = 40000
+CONDENSE_CHUNK_CHARS = 20000
+
+CONDENSE_SYSTEM_PROMPT = """You condense markdown documents without losing information.
+KEEP every number, percentage, currency amount, date, metric, named entity (companies, competitors, people, products), source URL and key claim exactly as written.
+REMOVE only repetition, filler, hedging and restated points. Keep the headings, the document's language (never translate) and markdown structure.
+Return ONLY the condensed markdown, no commentary."""
+
+
+class InputTooLongError(ValueError):
+    """Document still exceeds the hard cap after condensing."""
+
+
+def _split_for_condense(text: str, limit: int = CONDENSE_CHUNK_CHARS) -> list[str]:
+    """Split on blank lines into chunks <= limit chars (a single oversize paragraph stays whole)."""
+    chunks: list[str] = []
+    current = ""
+    for para in text.split("\n\n"):
+        if current and len(current) + len(para) + 2 > limit:
+            chunks.append(current)
+            current = para
+        else:
+            current = f"{current}\n\n{para}" if current else para
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def fit_document_to_budget(markdown_content: str) -> str:
+    """
+    Return the document unchanged when it fits TARGET_INPUT_CHARS; otherwise condense it with
+    an LLM pass (numbers, entities, URLs preserved). Raises InputTooLongError when the result
+    is still over HARD_MAX_INPUT_CHARS - content is never silently truncated.
+    """
+    if len(markdown_content) <= TARGET_INPUT_CHARS:
+        return markdown_content
+    logger.info(f"[CONDENSE] Input {len(markdown_content)} chars > {TARGET_INPUT_CHARS}; condensing")
+    chunks = _split_for_condense(markdown_content)
+    condensed = await asyncio.gather(*[
+        call_llm(chunk, CONDENSE_SYSTEM_PROMPT, max_tokens=16000, temperature=0.2) for chunk in chunks
+    ])
+    result = "\n\n".join(c.strip() for c in condensed)
+    logger.info(f"[CONDENSE] {len(markdown_content)} -> {len(result)} chars")
+    if len(result) > HARD_MAX_INPUT_CHARS:
+        raise InputTooLongError(
+            f"Document is {len(result)} chars after condensing (limit {HARD_MAX_INPUT_CHARS}); "
+            "split it into smaller documents."
+        )
+    return result
+
+
 async def select_components_with_llm(
     content_analysis: dict,
     layout_decision: dict,
-    markdown_content: str
+    markdown_content: str,
+    extra_instructions: str = "",
 ) -> list[dict]:
     """
     Use LLM to select and configure A2UI components.
@@ -372,12 +427,8 @@ RULES:
 
     prompt = format_component_selection_prompt(content_analysis, layout_decision)
 
-    # Add full document content for the LLM to use (up to 30k chars)
-    content_limit = 30000
-    if len(markdown_content) > content_limit:
-        doc_content = markdown_content[:content_limit] + "\n\n[... content truncated ...]"
-    else:
-        doc_content = markdown_content
+    # Reason: never silently cut content - condense over budget, fail loudly over the hard cap.
+    doc_content = await fit_document_to_budget(markdown_content)
 
     prompt += f"""
 
@@ -388,6 +439,7 @@ RULES:
 CRITICAL: You must generate components covering ALL sections and topics above, not just the first few.
 Extract REAL data from the document to populate component props.
 Return JSON with "components" array."""
+    prompt += extra_instructions
 
     logger.info(f"[LLM] Selecting components... (prompt length: {len(prompt)} chars)")
     try:
@@ -832,6 +884,21 @@ async def orchestrate_dashboard_with_llm(
     logger.info("=" * 60)
     logger.info("[ORCHESTRATOR] Starting LLM-powered dashboard generation")
     logger.info("=" * 60)
+
+    # Long structured reports: per-section path so no heading/bullet is lost to condensation
+    if should_use_section_path(markdown_content):
+        logger.info("[ORCHESTRATOR] Long structured report - using section-by-section path")
+        if meta is not None:
+            meta["layout_type"] = "report_sections"
+        async for component in orchestrate_sections(
+            markdown_content,
+            select_fn=select_components_with_llm,
+            build_fn=build_a2ui_component,
+            expand_fn=expand_component_specs,
+            apply_fn=apply_layout_and_zone,
+        ):
+            yield component
+        return
 
     # Step 1: Parse markdown structure (fast, no LLM)
     parsed = parse_markdown(markdown_content)

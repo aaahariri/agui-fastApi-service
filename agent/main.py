@@ -235,9 +235,11 @@ async def sync_generate_endpoint(request: Request):
     deps = StateDeps(state)
 
     try:
+        # Reason: the tools read the full markdown from shared state. Embedding it here
+        # as well put a 77k-char Arabic report past the model's 200k-token context (HTTP 400).
         prompt = (
-            "Please analyze this markdown document and generate a dashboard for it:\n\n"
-            + markdown_content
+            "Please analyze the markdown document in state and generate a dashboard for it. "
+            f"Preview of its first 1500 characters:\n\n{markdown_content[:1500]}"
         )
         await agent.run(prompt, deps=deps)
     except Exception as e:

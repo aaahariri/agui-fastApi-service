@@ -528,8 +528,8 @@ class TestComponentTypeRegistry:
 
     def test_component_count(self):
         """Test that we have all expected component types."""
-        # Canonical set now has 15 types
-        assert len(VALID_COMPONENT_TYPES) == 15
+        # Canonical set has 16 types (figureBlock registered)
+        assert len(VALID_COMPONENT_TYPES) == 16
 
 
 class TestIntegration:

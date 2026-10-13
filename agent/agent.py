@@ -91,7 +91,13 @@ def get_markdown_content(ctx: RunContext[StateDeps[DashboardState]]) -> str:
     """Get the current markdown content from state."""
     content = ctx.deps.state.markdown_content
     print(f"[TOOL] get_markdown_content: {len(content)} chars")
-    return content if content else "No markdown content provided yet."
+    if not content:
+        return "No markdown content provided yet."
+    # Reason: the tools (analyze_content, generate_components) read the full text from state;
+    # returning it here re-sends it through the model context and overflows it on long reports.
+    return content if len(content) <= 4000 else (
+        f"{content[:4000]}\n\n[... {len(content) - 4000} more chars omitted; tools read the full document from state]"
+    )
 
 
 @agent.tool
