@@ -99,6 +99,12 @@ class TestSyncGenerateEndpoint:
         assert response.status_code == 400
         assert "required" in response.json()["error"]
 
+    def test_oversize_markdown_returns_422(self):
+        from section_orchestrator import MAX_INPUT_CHARS
+        response = self.client.post("/api/generate", json={"markdown_content": "x" * (MAX_INPUT_CHARS + 1)})
+        assert response.status_code == 422
+        assert "limit" in response.json()["error"]
+
     def test_whitespace_only_markdown_returns_400(self):
         response = self.client.post("/api/generate", json={"markdown_content": "   "})
         assert response.status_code == 400

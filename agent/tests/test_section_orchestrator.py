@@ -30,10 +30,13 @@ def test_split_report_titles_and_bodies():
     assert "first bullet 2" in sections[1][1]
 
 
-def test_should_use_section_path_thresholds():
+def test_routing_by_structure_not_length():
     assert should_use_section_path(REPORT)
+    short4 = "# T\n\n" + "\n\n".join(f"## S{i}\n\n- x{i}" for i in range(4))
+    assert len(short4) < 200 and should_use_section_path(short4)
     assert not should_use_section_path("# Short\n\n## A\n\n- x")
-    assert not should_use_section_path("# T\n\n## A\n\n" + "word " * 5000)  # long but one section
+    assert not should_use_section_path("# T\n\n## A\n\n" + "word " * 2000)  # <30k, one section
+    assert should_use_section_path("# T\n\n## A\n\n" + "word " * 7000)  # >30k -> pseudo-sections
 
 
 def test_extract_source_items_kinds():
@@ -51,18 +54,55 @@ def test_coverage_adds_only_missing_text_verbatim():
 
 
 @pytest.mark.asyncio
-async def test_orchestrate_sections_headings_and_fallback_when_llm_fails():
+async def test_section_llm_failure_raises():
     async def failing_select(analysis, layout, md, extra):
         raise RuntimeError("llm down")
 
+    with pytest.raises(RuntimeError, match="llm down"):
+        [c async for c in orchestrate_sections(
+            REPORT, failing_select, lambda s, a: None, lambda s: s, lambda c, s: c,
+        )]
+
+
+async def _none_select(analysis, layout, md, extra):
+    return []
+
+
+@pytest.mark.asyncio
+async def test_intro_kept_and_headings_complete():
     out = [c async for c in orchestrate_sections(
-        REPORT, failing_select, lambda s, a: None, lambda s: s, lambda c, s: c,
+        REPORT.replace("# Report\n\n", "# Report\n\nIntro line 7 here\n\n", 1),
+        _none_select, lambda s, a: None, lambda s: s, lambda c, s: c,
     )]
-    headings = [c.props["text"] for c in out if c.type == "heading"]
-    assert headings == [f"Section {i}" for i in range(1, 6)]
-    bullets = [i["text"] for c in out if c.type == "bulletList" for i in c.props["items"]]
-    assert len(bullets) >= 10 and "second bullet 3 with numbers 42%" in bullets
+    assert (out[0].type, out[0].props) == ("heading", {"text": "Report", "level": 1})
+    assert out[1].props["items"][0]["text"] == "Intro line 7 here"
+    assert [c.props["text"] for c in out if c.type == "heading" and c.props["level"] == 2] == [
+        f"Section {i}" for i in range(1, 6)]
     assert len({c.id for c in out}) == len(out)
+
+
+@pytest.mark.asyncio
+async def test_no_section_long_doc_pseudo_sections_keep_all_numbers():
+    doc = "\n\n".join(f"Paragraph {i} revenue {1000 + i} units " + "filler " * 300 for i in range(40))
+    assert len(doc) > 30000 and should_use_section_path(doc)
+    calls = []
+
+    async def select(analysis, layout, md, extra):
+        calls.append(md)
+        return []
+
+    out = [c async for c in orchestrate_sections(doc, select, lambda s, a: None, lambda s: s, lambda c, s: c)]
+    assert len(calls) >= 4 and all(len(c) < 10000 for c in calls)
+    text = " ".join(i["text"] for c in out if c.type == "bulletList" for i in c.props["items"])
+    for i in range(40):
+        assert f"{1000 + i}" in text
+    assert not any(c.type == "heading" for c in out)
+
+
+def test_too_long_input_raises():
+    from section_orchestrator import InputTooLongError, MAX_INPUT_CHARS
+    with pytest.raises(InputTooLongError):
+        should_use_section_path("x" * (MAX_INPUT_CHARS + 1))
 
 
 @pytest.mark.asyncio
@@ -77,9 +117,19 @@ async def test_orchestrate_sections_keeps_llm_components_between_heading_and_gap
     out = [c async for c in orchestrate_sections(
         REPORT, select, build, lambda s: s, lambda c, s: c,
     )]
-    first = [c.type for c in out[:3]]
+    first = [c.type for c in out[1:4]]  # out[0] is the level-1 title
     # heading, LLM callout, then ONE merged gap-fill list (intro paragraph + uncovered bullet)
     assert first == ["heading", "calloutCard", "bulletList"]
+
+
+def test_gap_fill_never_truncates_and_keeps_table_rows():
+    long_prose = "word " * 100 + "ends here."
+    body = f"{long_prose}\n\n| Name | Value |\n|---|---|\n| plain | none |"
+    out = coverage_components(body, [])
+    texts = [i["text"] for c in out for i in c.props["items"]]
+    assert long_prose.strip() in texts
+    assert "| plain | none |" in texts and "| Name | Value |" in texts
+    assert not any("---" in t for t in texts)
 
 
 def test_gap_fill_keeps_evidence_verbatim_and_merges_the_rest():
@@ -111,47 +161,41 @@ def test_gap_fill_has_evidence_detection():
     assert not has_evidence("this is plain filler prose without anything specific")
 
 
-# --- condense instead of truncate (llm_orchestrator.fit_document_to_budget) ---
-
 @pytest.mark.asyncio
-async def test_short_document_is_untouched(monkeypatch):
+async def test_call_llm_retries_429_and_5xx_but_not_other_4xx(monkeypatch):
+    import httpx
     import llm_orchestrator as lo
 
-    async def boom(*a, **k):
-        raise AssertionError("LLM must not be called under budget")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
 
-    monkeypatch.setattr(lo, "call_llm", boom)
-    doc = "x" * lo.TARGET_INPUT_CHARS
-    assert await lo.fit_document_to_budget(doc) == doc
+    async def no_sleep(_):
+        pass
 
+    monkeypatch.setattr(lo.asyncio, "sleep", no_sleep)
 
-@pytest.mark.asyncio
-async def test_over_budget_is_condensed_not_truncated(monkeypatch):
-    import llm_orchestrator as lo
+    real = httpx.AsyncClient
 
-    calls: list[str] = []
+    def run(statuses):
+        seq = iter(statuses)
+        seen = []
 
-    async def fake_llm(prompt, system_prompt="", **k):
-        calls.append(prompt)
-        return prompt.replace("word ", "")  # drops filler, keeps facts
+        def handler(request):
+            seen.append(1)
+            code = next(seq)
+            if code == 200:
+                return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+            return httpx.Response(code, text="err")
 
-    monkeypatch.setattr(lo, "call_llm", fake_llm)
-    doc = "\n\n".join(f"Paragraph {i} revenue {i}% " + "word " * 400 for i in range(25))  # ~55k chars
-    assert len(doc) > 40000
-    out = await lo.fit_document_to_budget(doc)
-    assert len(calls) >= 2  # chunked
-    assert "content truncated" not in out
-    assert len(out) <= lo.HARD_MAX_INPUT_CHARS and "Paragraph 24" in out
+        monkeypatch.setattr(lo.httpx, "AsyncClient", lambda **k: real(transport=httpx.MockTransport(handler)))
+        return seen
 
-
-@pytest.mark.asyncio
-async def test_still_over_hard_cap_after_condense_fails_loudly(monkeypatch):
-    import llm_orchestrator as lo
-
-    async def identity(prompt, system_prompt="", **k):
-        return prompt
-
-    monkeypatch.setattr(lo, "call_llm", identity)
-    doc = "\n\n".join("para " * 400 for _ in range(30))  # ~60k chars, no shrink
-    with pytest.raises(lo.InputTooLongError, match="limit 40000"):
-        await lo.fit_document_to_budget(doc)
+    seen = run([429, 503, 200])
+    assert await lo.call_llm("p") == "ok" and len(seen) == 3
+    seen = run([429, 429, 429])
+    with pytest.raises(Exception, match="429"):
+        await lo.call_llm("p")
+    assert len(seen) == 3
+    seen = run([400, 200])
+    with pytest.raises(Exception, match="400"):
+        await lo.call_llm("p")
+    assert len(seen) == 1

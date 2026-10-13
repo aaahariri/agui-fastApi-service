@@ -9,6 +9,7 @@ on the content analysis.
 import asyncio
 import os
 import json
+import random
 import re
 from typing import AsyncGenerator
 import httpx
@@ -151,30 +152,33 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
+    max_attempts = 3
     async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{OPENROUTER_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": OPENROUTER_REFERER,
-                "X-Title": "Second Brain Research Dashboard",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-        )
+        for attempt in range(1, max_attempts + 1):
+            response = await client.post(
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": OPENROUTER_REFERER,
+                    "X-Title": "Second Brain Research Dashboard",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+            )
+            if response.status_code == 200:
+                return response.json()["choices"][0]["message"]["content"]
 
-        if response.status_code != 200:
-            error_text = response.text
-            logger.error(f"[LLM] Status {response.status_code}: {error_text}")
-            raise Exception(f"LLM API error: {response.status_code} - {error_text}")
-
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
+            # Reason: retry only rate limits and server errors; other 4xx are caller bugs.
+            retryable = response.status_code == 429 or response.status_code >= 500
+            logger.error(f"[LLM] Status {response.status_code} (attempt {attempt}/{max_attempts}): {response.text}")
+            if not retryable or attempt == max_attempts:
+                raise Exception(f"LLM API error: {response.status_code} - {response.text}")
+            await asyncio.sleep(2 ** attempt + random.uniform(0, 1))
 
 
 def extract_json_from_response(response: str) -> dict:
@@ -346,58 +350,6 @@ Always respond with valid JSON only, no additional text."""
     return result
 
 
-TARGET_INPUT_CHARS = 30000
-HARD_MAX_INPUT_CHARS = 40000
-CONDENSE_CHUNK_CHARS = 20000
-
-CONDENSE_SYSTEM_PROMPT = """You condense markdown documents without losing information.
-KEEP every number, percentage, currency amount, date, metric, named entity (companies, competitors, people, products), source URL and key claim exactly as written.
-REMOVE only repetition, filler, hedging and restated points. Keep the headings, the document's language (never translate) and markdown structure.
-Return ONLY the condensed markdown, no commentary."""
-
-
-class InputTooLongError(ValueError):
-    """Document still exceeds the hard cap after condensing."""
-
-
-def _split_for_condense(text: str, limit: int = CONDENSE_CHUNK_CHARS) -> list[str]:
-    """Split on blank lines into chunks <= limit chars (a single oversize paragraph stays whole)."""
-    chunks: list[str] = []
-    current = ""
-    for para in text.split("\n\n"):
-        if current and len(current) + len(para) + 2 > limit:
-            chunks.append(current)
-            current = para
-        else:
-            current = f"{current}\n\n{para}" if current else para
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-async def fit_document_to_budget(markdown_content: str) -> str:
-    """
-    Return the document unchanged when it fits TARGET_INPUT_CHARS; otherwise condense it with
-    an LLM pass (numbers, entities, URLs preserved). Raises InputTooLongError when the result
-    is still over HARD_MAX_INPUT_CHARS - content is never silently truncated.
-    """
-    if len(markdown_content) <= TARGET_INPUT_CHARS:
-        return markdown_content
-    logger.info(f"[CONDENSE] Input {len(markdown_content)} chars > {TARGET_INPUT_CHARS}; condensing")
-    chunks = _split_for_condense(markdown_content)
-    condensed = await asyncio.gather(*[
-        call_llm(chunk, CONDENSE_SYSTEM_PROMPT, max_tokens=16000, temperature=0.2) for chunk in chunks
-    ])
-    result = "\n\n".join(c.strip() for c in condensed)
-    logger.info(f"[CONDENSE] {len(markdown_content)} -> {len(result)} chars")
-    if len(result) > HARD_MAX_INPUT_CHARS:
-        raise InputTooLongError(
-            f"Document is {len(result)} chars after condensing (limit {HARD_MAX_INPUT_CHARS}); "
-            "split it into smaller documents."
-        )
-    return result
-
-
 async def select_components_with_llm(
     content_analysis: dict,
     layout_decision: dict,
@@ -427,8 +379,7 @@ RULES:
 
     prompt = format_component_selection_prompt(content_analysis, layout_decision)
 
-    # Reason: never silently cut content - condense over budget, fail loudly over the hard cap.
-    doc_content = await fit_document_to_budget(markdown_content)
+    doc_content = markdown_content
 
     prompt += f"""
 

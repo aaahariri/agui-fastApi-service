@@ -23,13 +23,16 @@ import re
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from a2ui_generator import A2UIComponent
-from logger import logger
 
-# Documents with at least this many H2 sections AND this many chars take the
-# section path. Below it the single-shot visualizer is unchanged (short docs
-# fit its 30k window and its condensed output is the intended product).
+# Documents with at least this many H2 sections take the section path (routing by
+# structure, not length, so a concise report keeps every heading).
 MIN_SECTIONS = 4
-MIN_CHARS = 12000
+# Docs without that structure: above PSEUDO_MIN_CHARS they are split on paragraph
+# boundaries into ~PSEUDO_CHUNK_CHARS pseudo-sections (lossless); above MAX_INPUT_CHARS
+# they are rejected.
+PSEUDO_MIN_CHARS = 30000
+PSEUDO_CHUNK_CHARS = 7000
+MAX_INPUT_CHARS = 120000
 MAX_CONCURRENCY = 4
 # A source item counts as "covered" when this share of its tokens appears in
 # one component's text.
@@ -58,11 +61,33 @@ def split_report(markdown: str) -> tuple[str, list[tuple[str, str]]]:
     return preamble, sections
 
 
+class InputTooLongError(ValueError):
+    """Document exceeds MAX_INPUT_CHARS."""
+
+
+def split_pseudo_sections(markdown: str, limit: int = PSEUDO_CHUNK_CHARS) -> list[str]:
+    """Split on blank lines into chunks of ~limit chars (an oversize paragraph stays whole). Lossless."""
+    chunks: list[str] = []
+    current = ""
+    for para in markdown.split("\n\n"):
+        if current and len(current) + len(para) + 2 > limit:
+            chunks.append(current)
+            current = para
+        else:
+            current = f"{current}\n\n{para}" if current else para
+    if current.strip():
+        chunks.append(current)
+    return chunks
+
+
 def should_use_section_path(markdown: str) -> bool:
-    if len(markdown) < MIN_CHARS:
-        return False
+    """True for >=4 `##` sections, or any doc long enough to need lossless pseudo-sectioning."""
+    if len(markdown) > MAX_INPUT_CHARS:
+        raise InputTooLongError(
+            f"Document is {len(markdown)} chars (limit {MAX_INPUT_CHARS}); split it into smaller documents."
+        )
     _, sections = split_report(markdown)
-    return len(sections) >= MIN_SECTIONS
+    return len(sections) >= MIN_SECTIONS or len(markdown) > PSEUDO_MIN_CHARS
 
 
 def _tokens(text: str) -> set[str]:
@@ -123,8 +148,15 @@ def extract_source_items(body: str) -> list[tuple[str, str]]:
             items.append(("bullet", bullet.group(1).strip()))
         elif not stripped:
             flush()
-        elif stripped.startswith("#") or stripped.startswith("```") or stripped.startswith("|"):
+        elif stripped.startswith("|"):
             flush()
+            if not re.fullmatch(r"[|\s:-]+", stripped):  # table row kept; separator row dropped
+                items.append(("row", stripped))
+        elif stripped.startswith("```"):
+            flush()
+        elif stripped.startswith("#"):
+            flush()
+            items.append(("paragraph", stripped.lstrip("#").strip()))
         else:
             para.append(stripped)
     flush()
@@ -136,11 +168,6 @@ def _plain(text: str) -> str:
     return re.sub(r"\*\*(.+?)\*\*", r"\1", text).strip()
 
 
-def _brief(text: str, limit: int = 200) -> str:
-    text = _plain(text)
-    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "..."
-
-
 def _bullet_list(texts: list[str]) -> A2UIComponent:
     return A2UIComponent(
         type="bulletList", id="bullet-list", props={"items": [{"text": t} for t in texts]}, zone="content",
@@ -150,7 +177,7 @@ def _bullet_list(texts: list[str]) -> A2UIComponent:
 def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UIComponent]:
     """
     Gap-fill for source text no component covers. Items carrying evidence are kept verbatim in
-    ONE bulletList; the remaining uncovered items are trimmed and merged into a second one.
+    ONE bulletList; the remaining uncovered items are merged in full (never cut) into a second one.
     """
     component_tokens = [_tokens(_component_text(c)) for c in built]
     evidence: list[str] = []
@@ -161,7 +188,7 @@ def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UICompo
         if has_evidence(text):
             evidence.append(_plain(text))
         else:
-            rest.append(_brief(text))
+            rest.append(_plain(text))
     return [_bullet_list(items) for items in (evidence, rest) if items]
 
 
@@ -173,24 +200,36 @@ async def _build_section(
     expand_fn: Callable[[list[dict]], list[dict]],
     apply_fn: Callable[[A2UIComponent, dict], A2UIComponent],
     semaphore: asyncio.Semaphore,
+    level: int = 2,
 ) -> list[A2UIComponent]:
-    analysis = {"document_type": "report", "title": title, "sections": [title]}
+    analysis = {"document_type": "report", "title": title or "Report", "sections": [title] if title else []}
     layout = {"layout_type": "summary_layout", "confidence": 1.0, "reasoning": "report section"}
     built: list[A2UIComponent] = []
-    try:
-        async with semaphore:
-            specs = await select_fn(analysis, layout, f"## {title}\n\n{body}", SECTION_INSTRUCTIONS)
-        for spec in expand_fn(specs):
-            component = build_fn(spec, analysis)
-            if component:
-                built.append(apply_fn(component, spec))
-    except Exception as e:  # coverage guard below still emits the section's text
-        logger.error(f"[SECTION] LLM failed for '{title}': {e}")
+    # Reason: a failed section must fail the request (caller retries the whole step), never ship degraded.
+    async with semaphore:
+        text = f"## {title}\n\n{body}" if title else body
+        specs = await select_fn(analysis, layout, text, SECTION_INSTRUCTIONS)
+    for spec in expand_fn(specs):
+        component = build_fn(spec, analysis)
+        if component:
+            built.append(apply_fn(component, spec))
 
-    heading = A2UIComponent(
-        type="heading", id="heading", props={"text": title, "level": 2}, zone="content",
+    heading = (
+        [A2UIComponent(type="heading", id="heading", props={"text": title, "level": level}, zone="content")]
+        if title else []
     )
-    return [heading, *built, *coverage_components(body, built)]
+    return [*heading, *built, *coverage_components(body, built)]
+
+
+def _opening(preamble: str) -> list[A2UIComponent]:
+    """Text before the first `##`: title line -> level-1 heading, remaining lines kept as the intro."""
+    out: list[A2UIComponent] = []
+    rest = preamble.strip()
+    m = re.match(r"#\s+(.+)", rest)
+    if m:
+        out.append(A2UIComponent(type="heading", id="heading", props={"text": m.group(1).strip(), "level": 1}, zone="content"))
+        rest = rest[m.end():]
+    return [*out, *coverage_components(rest, [])]
 
 
 async def orchestrate_sections(
@@ -201,11 +240,17 @@ async def orchestrate_sections(
     apply_fn: Callable[[A2UIComponent, dict], A2UIComponent],
 ) -> AsyncGenerator[A2UIComponent, None]:
     """Yield components section by section, in document order, with unique ids."""
-    _, sections = split_report(markdown)
+    preamble, sections = split_report(markdown)
+    if len(sections) >= MIN_SECTIONS:
+        jobs = [(t, b) for t, b in sections]
+        opening = _opening(preamble)
+    else:  # no usable structure: lossless pseudo-sections, no invented headings
+        jobs = [("", chunk) for chunk in split_pseudo_sections(markdown)]
+        opening = []
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-    results = await asyncio.gather(*[
-        _build_section(t, b, select_fn, build_fn, expand_fn, apply_fn, semaphore) for t, b in sections
-    ])
+    results = [opening, *await asyncio.gather(*[
+        _build_section(t, b, select_fn, build_fn, expand_fn, apply_fn, semaphore) for t, b in jobs
+    ])]
     n = 0
     for group in results:
         for component in group:

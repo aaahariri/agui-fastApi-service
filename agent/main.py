@@ -22,10 +22,14 @@ from starlette.requests import Request
 from agent import agent, DashboardState
 from pydantic_ai.ag_ui import StateDeps
 from logger import logger, reset_log_file
+from section_orchestrator import MAX_INPUT_CHARS
 
 # Configuration
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
 API_KEY = os.getenv("API_KEY", "")
+# Reason: a deployed service without a key would be open to the internet - refuse to start.
+if os.getenv("RAILWAY_ENVIRONMENT") and not API_KEY:
+    raise RuntimeError("API_KEY must be set when running on Railway (RAILWAY_ENVIRONMENT is set)")
 
 
 def verify_api_key(request: Request) -> JSONResponse | None:
@@ -229,6 +233,12 @@ async def sync_generate_endpoint(request: Request):
         return JSONResponse(
             {"error": "markdown_content is required and must be non-empty"},
             status_code=400,
+        )
+
+    if len(markdown_content) > MAX_INPUT_CHARS:
+        return JSONResponse(
+            {"error": f"Document is {len(markdown_content)} chars (limit {MAX_INPUT_CHARS}); split it into smaller documents."},
+            status_code=422,
         )
 
     state = DashboardState(markdown_content=markdown_content)
