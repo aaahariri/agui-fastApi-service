@@ -18,6 +18,10 @@ REMOTE_DIR = "/app"
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .uv_sync(str(APP_DIR), extra_options="--no-dev")
+    # Reason: non-secret model config lives in code. GENERATE_MODEL is a name the secret never sets, so
+    # precedence vs the secret's legacy OPENROUTER_MODEL is moot (Modal docs don't specify; code prefers GENERATE_MODEL).
+    # Image.env: modal.com/docs/guide/environment_variables
+    .env({"GENERATE_MODEL": "openai/gpt-5.6-sol", "OPENROUTER_REASONING_EFFORT": "medium"})
     .add_local_dir(
         APP_DIR,
         remote_path=REMOTE_DIR,

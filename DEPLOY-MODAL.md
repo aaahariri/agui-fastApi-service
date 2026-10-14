@@ -4,13 +4,13 @@ Code: `agent/modal_app.py` (wraps `main.app` unchanged). Not yet deployed.
 
 ## One-time setup (founder)
 1. `pip install modal` (or `uv tool install modal`), then `modal setup` (or `modal token new`) to authenticate.
-2. Create the secret (values never go in git):
-   ```
-   modal secret create agui-generate-secrets \
-     OPENROUTER_API_KEY="$OPENROUTER_API_KEY" API_KEY="$API_KEY" \
-     OPENROUTER_MODEL=anthropic/claude-sonnet-4.6 ALLOWED_ORIGINS="https://www.pearlhq.app"
-   ```
+2. Secret `agui-generate-secrets` (values never go in git). For a brand-new workspace only, run
+   `startup45-WebApp-v1/scripts/agui/modal-create-secret.sh`: it refuses if the secret exists (never `--force`),
+   sets `API_KEY` + `ALLOWED_ORIGINS`, and a placeholder `OPENROUTER_API_KEY=SET_IN_MODAL_UI`.
+   **`OPENROUTER_API_KEY` is managed only in the Modal UI; no script may overwrite the secret.**
    `API_KEY` is required: startup refuses to run on Modal without it.
+   Model config is not in the secret: `modal_app.py` sets `GENERATE_MODEL=openai/gpt-5.6-sol` and
+   `OPENROUTER_REASONING_EFFORT=medium` via `Image.env`; code prefers `GENERATE_MODEL` over legacy `OPENROUTER_MODEL`.
 
 ## Deploy
 ```

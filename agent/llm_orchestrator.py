@@ -142,11 +142,13 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
         The LLM response text
     """
     api_key = os.getenv("OPENROUTER_API_KEY")
-    model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
+    # Reason: GENERATE_MODEL (set in code via modal_app.py) wins over the legacy OPENROUTER_MODEL in the Modal secret.
+    model = os.getenv("GENERATE_MODEL") or os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
 
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY not set in environment")
 
+    print(f"[llm] model={model} reasoning_effort={os.getenv('OPENROUTER_REASONING_EFFORT')}", flush=True)
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})

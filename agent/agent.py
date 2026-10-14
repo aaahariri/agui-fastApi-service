@@ -61,7 +61,8 @@ class DashboardState(BaseModel):
 # Model name is resolved from env; the model itself is built lazily on the first
 # request (defer_model_check=True) so a missing OPENROUTER_API_KEY fails cleanly
 # per-request instead of crashing the container at import (no boot crash-loop).
-_MODEL_NAME = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
+_MODEL_NAME = os.getenv("GENERATE_MODEL") or os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
+print(f"[agent] model={_MODEL_NAME}", flush=True)
 
 
 # Create the agent with StateDeps for AG-UI integration

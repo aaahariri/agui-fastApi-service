@@ -25,3 +25,9 @@ def test_effort_forwarded(monkeypatch):
 
 def test_effort_absent_by_default(monkeypatch):
     assert "reasoning" not in _run(monkeypatch, None)
+
+
+def test_generate_model_wins_over_openrouter_model(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
+    monkeypatch.setenv("GENERATE_MODEL", "openai/gpt-5.6-sol")
+    assert _run(monkeypatch, None)["model"] == "openai/gpt-5.6-sol"
