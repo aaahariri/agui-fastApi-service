@@ -152,6 +152,17 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    # Reason: optional OpenRouter reasoning effort (low|medium|high) for reasoning models; unset = provider default.
+    effort = os.getenv("OPENROUTER_REASONING_EFFORT")
+    if effort:
+        payload["reasoning"] = {"effort": effort}
+
     max_attempts = 3
     async with httpx.AsyncClient(timeout=120.0) as client:
         for attempt in range(1, max_attempts + 1):
@@ -163,12 +174,7 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
                     "HTTP-Referer": OPENROUTER_REFERER,
                     "X-Title": "Second Brain Research Dashboard",
                 },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                }
+                json=payload,
             )
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]
