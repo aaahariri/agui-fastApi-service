@@ -28,8 +28,19 @@ from section_orchestrator import MAX_INPUT_CHARS
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
 API_KEY = os.getenv("API_KEY", "")
 # Reason: a deployed service without a key would be open to the internet - refuse to start.
-if os.getenv("RAILWAY_ENVIRONMENT") and not API_KEY:
-    raise RuntimeError("API_KEY must be set when running on Railway (RAILWAY_ENVIRONMENT is set)")
+# Markers: Railway=RAILWAY_ENVIRONMENT, Cloud Run=K_SERVICE, Modal=MODAL_IS_REMOTE ("1" in
+# Function containers) / MODAL_TASK_ID (every container) - modal.com/docs/guide/environment_variables
+_DEPLOY_ENV_MARKERS = ("RAILWAY_ENVIRONMENT", "K_SERVICE", "MODAL_IS_REMOTE", "MODAL_TASK_ID")
+
+
+def require_api_key_when_deployed(api_key: str) -> None:
+    """Raise RuntimeError if running on a known host (Railway/Cloud Run/Modal) without an API key."""
+    marker = next((m for m in _DEPLOY_ENV_MARKERS if os.getenv(m)), None)
+    if marker and not api_key:
+        raise RuntimeError(f"API_KEY must be set when deployed ({marker} is set)")
+
+
+require_api_key_when_deployed(API_KEY)
 
 
 def verify_api_key(request: Request) -> JSONResponse | None:

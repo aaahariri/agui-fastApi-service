@@ -200,3 +200,25 @@ class TestContextOverflowError:
             response = TestClient(app).post("/api/generate", json={"markdown_content": "# T\n\ntext"})
         assert response.status_code == 422
         assert "too large" in response.json()["error"]
+
+
+class TestDeployedAuthGuard:
+    """require_api_key_when_deployed refuses to start without API_KEY on Railway/Cloud Run/Modal."""
+
+    @pytest.mark.parametrize(
+        "marker", ["RAILWAY_ENVIRONMENT", "K_SERVICE", "MODAL_IS_REMOTE", "MODAL_TASK_ID"]
+    )
+    def test_raises_without_key(self, marker):
+        from main import require_api_key_when_deployed
+
+        with patch.dict("os.environ", {marker: "1"}, clear=True):
+            with pytest.raises(RuntimeError, match=marker):
+                require_api_key_when_deployed("")
+
+    def test_ok_with_key_or_local(self):
+        from main import require_api_key_when_deployed
+
+        with patch.dict("os.environ", {"MODAL_IS_REMOTE": "1"}, clear=True):
+            require_api_key_when_deployed("secret")
+        with patch.dict("os.environ", {}, clear=True):
+            require_api_key_when_deployed("")
