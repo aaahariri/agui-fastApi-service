@@ -60,6 +60,7 @@ from a2ui_generator import (
 from logger import logger
 from content_analyzer import parse_markdown, ContentAnalysis, _classify_heuristic
 from prompts import (
+    VERBATIM_COPY_RULE,
     format_content_analysis_prompt,
     format_layout_selection_prompt,
     format_component_selection_prompt,
@@ -142,7 +143,7 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
         The LLM response text
     """
     api_key = os.getenv("OPENROUTER_API_KEY")
-    # Reason: GENERATE_MODEL (set in code via modal_app.py) wins over the legacy OPENROUTER_MODEL in the Modal secret.
+    # Reason: GENERATE_MODEL (env: .env locally, Modal secret in prod) wins over the legacy OPENROUTER_MODEL.
     model = os.getenv("GENERATE_MODEL") or os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
 
     if not api_key:
@@ -375,15 +376,16 @@ async def select_components_with_llm(
     Returns:
         List of component specifications
     """
-    system_prompt = """You are an expert A2UI component architect. Generate diverse dashboard components.
+    system_prompt = f"""You are an expert A2UI component architect. Generate diverse dashboard components.
 CRITICAL: You MUST return valid JSON with a "components" array containing component specifications.
-Each component needs: component_type, priority, zone, and props with actual data from the document.
+Each component needs: component_type, priority, zone, and props with the document's own text.
+{VERBATIM_COPY_RULE}
 RULES:
 1. Cover ALL sections of the document - do NOT stop at the first few sections.
 2. Use at least 6 different component types. No single type should exceed 40% of components.
 3. Never place 3+ consecutive components of the same type.
 4. Match component types to content: quotes->QuoteCard, news stories->HeadlineCard, stats->StatCard, events->TimelineEvent.
-5. For documents with 5+ sections, generate 15-25 components."""
+5. Use as many components as needed to hold all of the text."""
 
     prompt = format_component_selection_prompt(content_analysis, layout_decision)
 
@@ -396,7 +398,7 @@ RULES:
 {doc_content}
 
 CRITICAL: You must generate components covering ALL sections and topics above, not just the first few.
-Extract REAL data from the document to populate component props.
+Copy the document's REAL text word for word into component props.
 Return JSON with "components" array."""
     prompt += extra_instructions
 

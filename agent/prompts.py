@@ -245,9 +245,22 @@ Begin your layout selection now."""
 # COMPONENT SELECTION PROMPT
 # ============================================================================
 
+VERBATIM_COPY_RULE = """## VERBATIM COPY RULE (overrides everything below)
+
+You STRUCTURE the document's text; you never edit it. Copy the document's text into component props word for word.
+- Do NOT shorten, merge, paraphrase, summarise, condense, reword or translate any text.
+- Keep every number, percentage, currency amount, date, named source and URL exactly as written.
+- Keep the document's original language.
+- Every sentence of the document must appear, unchanged, in some component's props.
+- You decide ONLY the component types, the grouping of text into components, and their order.
+- Use as many components as needed to hold ALL of the text; there is no component-count limit and none may be dropped to save space.
+"""
+
 COMPONENT_SELECTION_PROMPT = """You are an expert A2UI component architect specializing in creating diverse, engaging dashboard interfaces.
 
 Your task is to select and configure the OPTIMAL set of A2UI components to represent the analyzed content in an engaging, scannable dashboard.
+
+{verbatim_rule}
 
 ## Content Analysis
 
@@ -401,10 +414,8 @@ You MUST follow these rules to ensure thorough content representation:
 - Minimum: Generate 1-2 components per major section + summary components
 
 ### Rule 2: Scale With Document Size
-- Short documents (< 500 words): 5-8 components
-- Medium documents (500-2000 words): 10-15 components
-- Long documents (2000+ words): 15-25 components
-- IMPORTANT: Stay within these ranges. More is NOT better — aim for information density per component.
+- Use as many components as needed to hold ALL of the document's text, whatever its size.
+- IMPORTANT: Never drop or shorten text to keep the component count low.
 
 ### Rule 3: Minimum Component Type Diversity
 - **Generate at least 4 DIFFERENT component types** in your selection
@@ -445,8 +456,8 @@ Components in the same zone will be grouped together visually. Use zones to crea
 
 Follow this process:
 
-### Step 1: Identify Key Content Elements
-- What are the most important pieces of information?
+### Step 1: Identify the Content Elements
+- What pieces of information does the document contain (all of them are kept)?
 - What content types are present? (code, data, media, text)
 - What's the primary user goal? (learn, reference, consume)
 
@@ -455,7 +466,7 @@ Follow this process:
 - Statistics/metrics → statCard, metricRow
 - Links → linkPreview
 - Steps/procedures → stepCard
-- Summaries → tldr, keyTakeaways
+- Existing summary/takeaway passages → tldr, keyTakeaways (text copied unchanged)
 
 ### Step 2b: Content Pattern Matching (IMPORTANT)
 Match these content patterns to the BEST component type:
@@ -494,7 +505,7 @@ Return a JSON array of component specifications:
       "zone": "hero",
       "data_source": "summary of first 2-3 paragraphs",
       "props": {{
-        "content": "Brief TL;DR summary text",
+        "content": "The document's own TL;DR text, copied word for word",
         "max_length": 200,
         "width_hint": "full"
       }},
@@ -551,7 +562,7 @@ Return a JSON array of component specifications:
 ```json
 {{
   "components": [
-    {{"component_type": "tldr", "zone": "hero", "priority": "high", "props": {{"content": "Brief summary of the document's key points", "width_hint": "full"}}}},
+    {{"component_type": "tldr", "zone": "hero", "priority": "high", "props": {{"content": "The document's own summary passage, copied word for word", "width_hint": "full"}}}},
     {{"component_type": "statCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
     {{"component_type": "statCard", "zone": "metrics", "priority": "high", "props": {{"width_hint": "third"}}}},
     {{"component_type": "metricRow", "zone": "metrics", "priority": "medium", "props": {{"width_hint": "full"}}}},
@@ -606,7 +617,7 @@ Return a JSON array of component specifications:
 6. **Match Content to Best Type**: Use quoteCard for quotes, headlineCard for news, statCard for numbers, stepCard for procedures
 7. **Provide Complete Props**: Include all necessary data for each component
 8. **Consolidate Lists**: Bullet points within a section go into ONE component (keyTakeaways, calloutCard, bulletList) — not one component per bullet
-9. **Stay in Range**: 15-25 components for long documents. More is not better.
+9. **Hold All Text**: Use as many components as needed to carry every sentence of the document word for word.
 
 Begin your component selection now."""
 
@@ -717,6 +728,7 @@ Component Priorities: {', '.join(suggestions[:15])}
 """
 
     return COMPONENT_SELECTION_PROMPT.format(
+        verbatim_rule=VERBATIM_COPY_RULE,
         content_analysis=analysis_text,
         layout_decision=layout_text
     )

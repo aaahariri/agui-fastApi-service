@@ -9,8 +9,9 @@ Code: `agent/modal_app.py` (wraps `main.app` unchanged). Not yet deployed.
    sets `API_KEY` + `ALLOWED_ORIGINS`, and a placeholder `OPENROUTER_API_KEY=SET_IN_MODAL_UI`.
    **`OPENROUTER_API_KEY` is managed only in the Modal UI; no script may overwrite the secret.**
    `API_KEY` is required: startup refuses to run on Modal without it.
-   Model config is not in the secret: `modal_app.py` sets `GENERATE_MODEL=openai/gpt-5.6-sol` and
-   `OPENROUTER_REASONING_EFFORT=medium` via `Image.env`; code prefers `GENERATE_MODEL` over legacy `OPENROUTER_MODEL`.
+   Model config lives in the secret (edit in the Modal UI, then redeploy): `GENERATE_MODEL` (e.g. `openai/gpt-5.6-sol`)
+   and optional `OPENROUTER_REASONING_EFFORT` (`low|medium|high`). Code prefers `GENERATE_MODEL` over legacy
+   `OPENROUTER_MODEL`; with neither set it falls back to `anthropic/claude-sonnet-4.6`. Locally, set the same vars in `agent/.env`.
 
 ## Deploy
 ```

@@ -15,7 +15,7 @@ property of the pipeline instead of a prompt hope:
    "represent every item" instruction.
 4. Deterministic coverage guard: uncovered source items that carry evidence
    (numbers, %, currency, dates, URLs, named entities) are appended verbatim;
-   the remaining uncovered items are merged into one compact bulletList.
+   the remaining uncovered items are appended in full as a bulletList.
 """
 
 import asyncio
@@ -23,6 +23,7 @@ import re
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from a2ui_generator import A2UIComponent
+from prompts import VERBATIM_COPY_RULE
 
 # Documents with at least this many H2 sections take the section path (routing by
 # structure, not length, so a concise report keeps every heading).
@@ -38,16 +39,14 @@ MAX_CONCURRENCY = 4
 # one component's text.
 COVERAGE_THRESHOLD = 0.6
 
-SECTION_INSTRUCTIONS = """
+SECTION_INSTRUCTIONS = f"""
 
 ## THIS IS ONE SECTION OF A LARGER REPORT (overrides the size ranges above)
 
+{VERBATIM_COPY_RULE}
 - The section heading is already rendered separately. Do NOT repeat it.
-- Use only the components needed. Minimum words, maximum value: be concise, merge related points, drop repetition and filler.
-- Every number, percentage, currency amount, date, named source/competitor and URL MUST be kept.
-- Use 3-6 components for this section; the 15-25 range does not apply.
-- Prefer statCard/metricRow for numbers, calloutCard for key judgements, bulletList for plain lists.
-- Keep the document's language; do not translate.
+- Use as many components as needed to hold all the text of this section; no component-count limit applies.
+- Prefer statCard/metricRow for numbers, calloutCard for key judgements, bulletList for plain lists (text unchanged).
 """
 
 SelectFn = Callable[[dict, dict, str, str], Awaitable[list[dict]]]

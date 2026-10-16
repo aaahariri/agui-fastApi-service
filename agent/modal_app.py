@@ -18,10 +18,6 @@ REMOTE_DIR = "/app"
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .uv_sync(str(APP_DIR), extra_options="--no-dev")
-    # Reason: non-secret model config lives in code. GENERATE_MODEL is a name the secret never sets, so
-    # precedence vs the secret's legacy OPENROUTER_MODEL is moot (Modal docs don't specify; code prefers GENERATE_MODEL).
-    # Image.env: modal.com/docs/guide/environment_variables
-    .env({"GENERATE_MODEL": "openai/gpt-5.6-sol", "OPENROUTER_REASONING_EFFORT": "medium"})
     .add_local_dir(
         APP_DIR,
         remote_path=REMOTE_DIR,
@@ -35,7 +31,7 @@ app = modal.App("agui-generate", image=image)
 # Reason: Modal's HTTP request limit is 150s; longer requests get a 303 to a result URL
 # (modal.com/docs/guide/webhook-timeouts). timeout=600 lets the function outlive that.
 @app.function(
-    secrets=[modal.Secret.from_name("agui-generate-secrets")],  # OPENROUTER_API_KEY, API_KEY, ...
+    secrets=[modal.Secret.from_name("agui-generate-secrets")],  # OPENROUTER_API_KEY, API_KEY, GENERATE_MODEL, OPENROUTER_REASONING_EFFORT
     timeout=600,
     scaledown_window=300,
     # min_containers=1,  # uncomment to avoid cold starts (billed while idle)
