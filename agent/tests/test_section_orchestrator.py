@@ -224,3 +224,19 @@ async def test_empty_section_body_skips_llm_and_keeps_heading():
     assert not any(md.startswith("## Empty") or md.startswith("## Section 3") for md in calls)
     assert [c.props["text"] for c in out if c.type == "heading" and c.props["level"] == 2] == [
         "Empty", "Section 2", "Section 3", "Section 4", "Section 5"]
+
+
+@pytest.mark.asyncio
+async def test_section_selector_allows_empty_selection(monkeypatch):
+    import llm_orchestrator
+
+    async def empty_llm(*args, **kwargs):
+        return '{"components": []}'
+
+    monkeypatch.setattr(llm_orchestrator, "call_llm", empty_llm)
+    analysis = {"document_type": "report", "title": "R", "sections": []}
+    layout = {"layout_type": "summary_layout"}
+    assert await llm_orchestrator.select_components_with_llm(
+        analysis, layout, "## T\n\n### heading only", allow_empty=True) == []
+    with pytest.raises(ValueError, match="no components"):
+        await llm_orchestrator.select_components_with_llm(analysis, layout, "## T\n\ntext")

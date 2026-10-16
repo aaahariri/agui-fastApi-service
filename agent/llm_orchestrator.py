@@ -11,6 +11,7 @@ import os
 import json
 import random
 import re
+from functools import partial
 from typing import AsyncGenerator
 import httpx
 from dotenv import load_dotenv
@@ -364,6 +365,7 @@ async def select_components_with_llm(
     layout_decision: dict,
     markdown_content: str,
     extra_instructions: str = "",
+    allow_empty: bool = False,
 ) -> list[dict]:
     """
     Use LLM to select and configure A2UI components.
@@ -415,6 +417,12 @@ Return JSON with "components" array."""
     result = extract_json_from_response(response)
 
     components = result.get("components", [])
+
+    # Reason: on the section path the verbatim gap-fill renders the section's text, so an
+    # empty selection (e.g. a section holding only a sub-heading) is not a failure.
+    if not components and allow_empty:
+        logger.warning("[LLM] No components selected; section text kept by gap-fill")
+        return []
 
     if not components:
         logger.error(f"[LLM] No components parsed. Response first 1000 chars:\n{response[:1000]}")
@@ -853,7 +861,7 @@ async def orchestrate_dashboard_with_llm(
             meta["layout_type"] = "report_sections"
         async for component in orchestrate_sections(
             markdown_content,
-            select_fn=select_components_with_llm,
+            select_fn=partial(select_components_with_llm, allow_empty=True),
             build_fn=build_a2ui_component,
             expand_fn=expand_component_specs,
             apply_fn=apply_layout_and_zone,
