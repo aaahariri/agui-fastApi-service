@@ -207,3 +207,20 @@ async def test_call_llm_retries_429_and_5xx_but_not_other_4xx(monkeypatch):
     with pytest.raises(Exception, match="400"):
         await lo.call_llm("p")
     assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_section_body_skips_llm_and_keeps_heading():
+    calls: list[str] = []
+
+    async def recording_select(analysis, layout, md, extra):
+        calls.append(md)
+        if "Body 2" not in md:
+            return []  # the real selector raises on an empty list
+        return [{"component_type": "statCard"}]
+
+    doc = "# Report\n\n## Empty\n\n## Section 2\n\nBody 2 with 45% growth\n\n## Section 3\n\n## Section 4\n\nBody 4\n\n## Section 5\n\nBody 5\n"
+    out = [c async for c in orchestrate_sections(doc, recording_select, lambda s, a: None, lambda s: s, lambda c, s: c)]
+    assert not any(md.startswith("## Empty") or md.startswith("## Section 3") for md in calls)
+    assert [c.props["text"] for c in out if c.type == "heading" and c.props["level"] == 2] == [
+        "Empty", "Section 2", "Section 3", "Section 4", "Section 5"]

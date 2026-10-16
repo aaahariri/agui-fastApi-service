@@ -235,6 +235,14 @@ async def _build_section(
     analysis = {"document_type": "report", "title": title or "Report", "sections": [title] if title else []}
     layout = {"layout_type": "summary_layout", "confidence": 1.0, "reasoning": "report section"}
     built: list[A2UIComponent] = []
+    heading = (
+        [A2UIComponent(type="heading", id="heading", props={"text": title, "level": level}, zone="content")]
+        if title else []
+    )
+    # Reason: a heading with no body has nothing to structure; the selector returns no
+    # components for it and that failed the whole request.
+    if not body.strip():
+        return heading
     # Reason: a failed section must fail the request (caller retries the whole step), never ship degraded.
     async with semaphore:
         text = f"## {title}\n\n{body}" if title else body
@@ -244,10 +252,6 @@ async def _build_section(
         if component:
             built.append(apply_fn(component, spec))
 
-    heading = (
-        [A2UIComponent(type="heading", id="heading", props={"text": title, "level": level}, zone="content")]
-        if title else []
-    )
     return [*heading, *built, *coverage_components(body, built)]
 
 
