@@ -109,94 +109,105 @@ class TestSyncGenerateEndpoint:
         response = self.client.post("/api/generate", json={"markdown_content": "   "})
         assert response.status_code == 400
 
-    @patch("main.agent")
-    def test_successful_generation_returns_dashboard_state(self, mock_agent):
-        """Mock the agent to verify the endpoint wiring without real LLM calls."""
+    def test_short_input_runs_classifier_then_components(self):
+        """Short doc: classifier runs once, its analysis is reused by the component step; no agent involved."""
+        from a2ui_generator import A2UIComponent
 
-        async def fake_run(prompt, *, deps, **kwargs):
-            state = deps.state
-            state.document_title = "Test Document"
-            state.document_type = "article"
-            state.status = "complete"
-            state.progress = 100
-            state.components = [
-                {
-                    "type": "a2ui.TLDR",
-                    "id": "comp-1",
-                    "props": {"summary": "Test summary"},
-                    "zone": "hero",
-                }
-            ]
+        calls = []
 
-        mock_agent.run = AsyncMock(side_effect=fake_run)
+        async def fake_classifier(md):
+            calls.append("classify")
+            return {"document_type": "tutorial"}
 
-        response = self.client.post(
-            "/api/generate",
-            json={"markdown_content": "# Test\n\nSome content here."},
-        )
+        async def fake_orchestrate(md, content_analysis=None, meta=None):
+            calls.append(("components", content_analysis))
+            meta["layout_type"] = "instructional"
+            yield A2UIComponent(type="a2ui.TLDR", id="comp-1", props={"summary": "s"}, zone="hero")
+
+        with patch("llm_orchestrator.analyze_content_with_llm", side_effect=fake_classifier), \
+             patch("llm_orchestrator.orchestrate_dashboard_with_llm", side_effect=fake_orchestrate), \
+             patch("main.agent") as mock_agent:
+            response = self.client.post(
+                "/api/generate", json={"markdown_content": "# Test Doc\n\nSome content here."}
+            )
+            mock_agent.run.assert_not_called()
 
         assert response.status_code == 200
         data = response.json()
-
-        # Verify DashboardState shape
-        assert data["document_title"] == "Test Document"
-        assert data["document_type"] == "article"
+        assert calls == ["classify", ("components", {"document_type": "tutorial"})]
+        assert data["document_title"] == "Test Doc"
+        assert data["document_type"] == "tutorial"
+        assert data["layout_type"] == "instructional"
         assert data["status"] == "complete"
         assert data["progress"] == 100
-        assert len(data["components"]) == 1
-        assert data["components"][0]["type"] == "a2ui.TLDR"
-        assert data["markdown_content"] == "# Test\n\nSome content here."
+        assert data["current_step"] == "Dashboard complete!"
+        assert data["components"] == [
+            {"type": "a2ui.TLDR", "id": "comp-1", "props": {"summary": "s"}, "zone": "hero"}
+        ]
+        assert data["content_analysis"]["document_type"] == "tutorial"
+        assert data["markdown_content"] == "# Test Doc\n\nSome content here."
         assert data["error_message"] is None
+        assert [e["message"] for e in data["activity_log"]] == [
+            "Starting content analysis",
+            "Analysis complete: tutorial",
+            "Generated 1 components",
+        ]
 
-    @patch("main.agent")
-    def test_agent_error_returns_500(self, mock_agent):
-        """Verify that agent exceptions become 500 responses."""
-        mock_agent.run = AsyncMock(side_effect=RuntimeError("LLM API timeout"))
+    def test_section_path_input_skips_classifier(self):
+        """Long structured report: the classifier LLM call is never made."""
+        from a2ui_generator import A2UIComponent
 
-        response = self.client.post(
-            "/api/generate",
-            json={"markdown_content": "# Test"},
-        )
+        async def fake_orchestrate(md, content_analysis=None, meta=None):
+            assert content_analysis is None
+            meta["layout_type"] = "report_sections"
+            yield A2UIComponent(type="a2ui.TLDR", id="comp-1", props={"summary": "s"})
 
+        with patch("section_orchestrator.should_use_section_path", return_value=True), \
+             patch("llm_orchestrator.analyze_content_with_llm", new_callable=AsyncMock) as classifier, \
+             patch("llm_orchestrator.orchestrate_dashboard_with_llm", side_effect=fake_orchestrate):
+            response = self.client.post(
+                "/api/generate", json={"markdown_content": "# Long Report\n\n## A\n\ntext"}
+            )
+
+        assert response.status_code == 200
+        classifier.assert_not_called()
+        data = response.json()
+        assert data["document_title"] == "Long Report"
+        assert data["document_type"] == "report"
+        assert data["layout_type"] == "report_sections"
+        assert data["status"] == "complete"
+        assert len(data["components"]) == 1
+
+    def test_pipeline_error_returns_500(self):
+        with patch("llm_orchestrator.analyze_content_with_llm", side_effect=RuntimeError("LLM API timeout")):
+            response = self.client.post("/api/generate", json={"markdown_content": "# Test"})
         assert response.status_code == 500
         assert "LLM API timeout" in response.json()["error"]
 
-    @patch("main.agent")
-    def test_response_contains_all_state_fields(self, mock_agent):
-        """Verify the response includes every DashboardState field."""
-        mock_agent.run = AsyncMock()
+    def test_response_contains_all_state_fields(self):
+        """Verify the response includes every serialized DashboardState field."""
 
-        response = self.client.post(
-            "/api/generate",
-            json={"markdown_content": "# Minimal"},
-        )
+        async def fake_orchestrate(md, content_analysis=None, meta=None):
+            return
+            yield
+
+        with patch("llm_orchestrator.analyze_content_with_llm", new_callable=AsyncMock, return_value={}), \
+             patch("llm_orchestrator.orchestrate_dashboard_with_llm", side_effect=fake_orchestrate):
+            response = self.client.post("/api/generate", json={"markdown_content": "# Minimal"})
 
         assert response.status_code == 200
         data = response.json()
-
-        expected_fields = DashboardState.model_fields.keys()
-        for field in expected_fields:
-            assert field in data, f"Missing field: {field}"
-
-    @patch("main.agent")
-    def test_prompt_includes_markdown_content(self, mock_agent):
-        """Verify the agent receives the markdown in its prompt."""
-        mock_agent.run = AsyncMock()
-        markdown = "# Special Content\n\nVery unique text."
-
-        self.client.post("/api/generate", json={"markdown_content": markdown})
-
-        call_args = mock_agent.run.call_args
-        prompt = call_args[0][0]
-        assert "Special Content" in prompt
-        assert "Very unique text." in prompt
+        for name, field in DashboardState.model_fields.items():
+            if field.exclude:
+                assert name not in data
+            else:
+                assert name in data, f"Missing field: {name}"
 
 
 class TestContextOverflowError:
     def test_context_limit_error_is_422_with_clear_message(self):
         err = RuntimeError("status_code: 400, body: {'message': \"This endpoint's maximum context length is 200000 tokens.\"}")
-        with patch("main.agent") as mock_agent:
-            mock_agent.run = AsyncMock(side_effect=err)
+        with patch("llm_orchestrator.analyze_content_with_llm", side_effect=err):
             response = TestClient(app).post("/api/generate", json={"markdown_content": "# T\n\ntext"})
         assert response.status_code == 422
         assert "too large" in response.json()["error"]

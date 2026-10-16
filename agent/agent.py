@@ -117,16 +117,11 @@ def get_markdown_content(ctx: RunContext[StateDeps[DashboardState]]) -> str:
     )
 
 
-@agent.tool
-async def analyze_content(ctx: RunContext[StateDeps[DashboardState]]) -> ToolReturn:
-    """
-    Analyze the markdown content to determine document type and extract key elements.
-    Updates the shared state with analysis results.
-    """
+async def run_analysis(state: DashboardState) -> None:
+    """Classifier step: fill title/type/content_analysis/analysis_cache. Shared by the tool and /api/generate."""
     from content_analyzer import parse_markdown
     from llm_orchestrator import analyze_content_with_llm
 
-    state = ctx.deps.state
     markdown = state.markdown_content
 
     print(f"[TOOL] analyze_content: analyzing {len(markdown)} chars")
@@ -168,18 +163,11 @@ async def analyze_content(ctx: RunContext[StateDeps[DashboardState]]) -> ToolRet
 
     print(f"[TOOL] analyze_content: document_type={state.document_type}")
 
-    return _tool_result(state, f"Analysis complete: {state.document_type}")
 
-
-@agent.tool
-async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> ToolReturn:
-    """
-    Generate A2UI dashboard components based on the analyzed content.
-    Each component is added to state and synced with the frontend.
-    """
+async def run_generation(state: DashboardState) -> None:
+    """Component step: fill components/layout_type/status. Shared by the tool and /api/generate."""
     from llm_orchestrator import orchestrate_dashboard_with_llm
 
-    state = ctx.deps.state
 
     print(f"[TOOL] generate_components: starting")
 
@@ -233,4 +221,44 @@ async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> Too
 
     print(f"[TOOL] generate_components: complete with {component_count} components")
 
-    return _tool_result(state, f"Generated {component_count} components")
+
+async def run_direct_pipeline(state: DashboardState) -> None:
+    """
+    Deterministic /api/generate pipeline (no outer agent, no extra LLM turns).
+
+    Reason: long reports take the per-section path, which ignores the classifier result,
+    so skip the classifier there; short documents classify first, then generate components.
+    """
+    from content_analyzer import parse_markdown
+    from section_orchestrator import should_use_section_path
+
+    if should_use_section_path(state.markdown_content):
+        parsed = parse_markdown(state.markdown_content)
+        state.document_title = parsed.get("title", "Untitled")
+        state.document_type = "report"
+        state.content_analysis = parsed
+    else:
+        await run_analysis(state)
+    await run_generation(state)
+
+
+@agent.tool
+async def analyze_content(ctx: RunContext[StateDeps[DashboardState]]) -> ToolReturn:
+    """
+    Analyze the markdown content to determine document type and extract key elements.
+    Updates the shared state with analysis results.
+    """
+    state = ctx.deps.state
+    await run_analysis(state)
+    return _tool_result(state, f"Analysis complete: {state.document_type}")
+
+
+@agent.tool
+async def generate_components(ctx: RunContext[StateDeps[DashboardState]]) -> ToolReturn:
+    """
+    Generate A2UI dashboard components based on the analyzed content.
+    Each component is added to state and synced with the frontend.
+    """
+    state = ctx.deps.state
+    await run_generation(state)
+    return _tool_result(state, f"Generated {len(state.components)} components")

@@ -19,7 +19,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.applications import Starlette
 from starlette.requests import Request
 
-from agent import agent, DashboardState
+from agent import agent, DashboardState, run_direct_pipeline
 from pydantic_ai.ag_ui import StateDeps
 from logger import logger, reset_log_file
 from section_orchestrator import MAX_INPUT_CHARS
@@ -253,16 +253,9 @@ async def sync_generate_endpoint(request: Request):
         )
 
     state = DashboardState(markdown_content=markdown_content)
-    deps = StateDeps(state)
 
     try:
-        # Reason: the tools read the full markdown from shared state. Embedding it here
-        # as well put a 77k-char Arabic report past the model's 200k-token context (HTTP 400).
-        prompt = (
-            "Please analyze the markdown document in state and generate a dashboard for it. "
-            f"Preview of its first 1500 characters:\n\n{markdown_content[:1500]}"
-        )
-        await agent.run(prompt, deps=deps)
+        await run_direct_pipeline(state)
     except Exception as e:
         print(f"[SYNC ERROR] {e}", flush=True)
         import traceback
