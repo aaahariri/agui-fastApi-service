@@ -1194,3 +1194,33 @@ def test_step_cards_never_share_a_row_with_other_cards():
     assert _groups(mixed) == [None, None]
     steps = group_short_rows([_comp("stepCard", title="أ", description="نص قصير"), _comp("stepCard", title="ب", description="نص قصير")], "s1")
     assert _groups(steps)[0] and _groups(steps)[0] == _groups(steps)[1]
+
+
+def test_item_equal_to_a_label_is_not_also_counted_as_a_later_label_it_starts_with():
+    """r6: the gap-fill item 'الفجوة التنافسية وفرصة التميز' (source line 0) also started with the later label 'الفجوة', so it looked out of order."""
+    from section_orchestrator import order_by_source, order_violations
+
+    s1, s2 = "نص الفقرة الأولى طويل بما يكفي هنا.", "نص الفقرة الثانية طويل بما يكفي هنا."
+    body = f"الفجوة التنافسية وفرصة\n\nكيف يحل\n\n{s1}\n\nالفجوة\n\n{s2}"
+    comps = [
+        _comp("bulletList", items=[{"text": "الفجوة التنافسية وفرصة"}]),
+        _comp("calloutCard", type="info", title="كيف يحل", content=s1),
+        _comp("calloutCard", type="info", title="الفجوة", content=s2),
+    ]
+    assert order_violations(body, comps) == []
+    assert order_violations(body, order_by_source(comps, body)) == []
+
+
+def test_two_source_labels_merged_into_one_multiline_title_both_count_as_shown():
+    """r7: title 'تقييم وصف الفكرة\\nالوضوح' carries two source labels; the second must not be hoisted again above it."""
+    from section_orchestrator import order_by_source, order_violations
+
+    s1, s2 = "الفكرة واضحة عموما وتقدم خدمة محددة.", "أما الحل المقترح فيشمل تصميم المواقع باحترافية."
+    body = f"### تقييم وصف الفكرة\n\n### الوضوح\n{s1} {s2}"
+    comps = [
+        _comp("calloutCard", type="info", title="تقييم وصف الفكرة\nالوضوح", content=s1),
+        _comp("calloutCard", type="info", title="الوضوح", content=s2),
+    ]
+    out = order_by_source(comps, body)
+    assert order_violations(body, out) == []
+    assert [c.type for c in out] == ["calloutCard", "calloutCard"]

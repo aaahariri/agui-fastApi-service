@@ -148,6 +148,9 @@ def _coverage_leaves(components: list[A2UIComponent]) -> list[str]:
         if isinstance(value, str):
             if key := _fold(value):
                 leaves.append(key)
+                # Reason: a multi-line text (two labels merged into one title) also carries each line on its own.
+                if "\n" in value.strip():
+                    leaves.extend(k for line in value.split("\n") if (k := _fold(line)))
         elif isinstance(value, dict):
             for k, v in value.items():
                 if k not in _NON_TEXT_KEYS:
@@ -934,11 +937,14 @@ def _component_positions(component: A2UIComponent, keys: list[str]) -> list[int]
     leaves = _coverage_leaves([component])
     # Reason: a card may split one source sentence across fields ("title: description"); its joined text carries it.
     for leaf in [*leaves, " ".join(leaves)] if len(leaves) > 1 else leaves:
+        # Reason: a leaf that IS a source line is that line only; it is not also a later label it merely starts with.
+        whole = {n for n, key in enumerate(keys) if leaf == key}
+        found |= whole
         for n, key in enumerate(keys):
             if len(key.split()) >= MIN_SUBSTRING_WORDS:
                 hit = _contains(leaf, key)
             else:  # a label is a leaf of its own (or opens one), never a word found inside a sentence
-                hit = leaf == key or leaf.startswith(key + " ")
+                hit = not whole and (leaf == key or leaf.startswith(key + " "))
             if hit:
                 found.add(n)
     return sorted(found)
