@@ -59,7 +59,8 @@ from a2ui_generator import (
     generate_timeline_event,
 )
 from logger import logger
-from content_analyzer import parse_markdown, ContentAnalysis, _classify_heuristic
+from content_analyzer import parse_markdown, ContentAnalysis, _classify_heuristic, _extract_entities
+from jev_classifier import classify_document_type
 from prompts import (
     VERBATIM_COPY_RULE,
     format_content_analysis_prompt,
@@ -288,7 +289,10 @@ def _recover_truncated_components(json_str: str) -> list[dict]:
 
 async def analyze_content_with_llm(markdown_content: str) -> dict:
     """
-    Use LLM to analyze markdown content and classify it.
+    Classify markdown content.
+
+    document_type comes from Jev (one System One request, probability-gated); title and entities come
+    from the parser. On any Jev failure or abstention the heuristic classifier decides.
 
     Args:
         markdown_content: Raw markdown content
@@ -296,34 +300,26 @@ async def analyze_content_with_llm(markdown_content: str) -> dict:
     Returns:
         Content analysis dictionary
     """
-    system_prompt = """You are an expert content analyst. Analyze documents and return structured JSON.
-Always respond with valid JSON only, no additional text."""
+    parsed = parse_markdown(markdown_content)
 
-    prompt = format_content_analysis_prompt(markdown_content)
-
-    logger.info(f"[LLM] Analyzing content... (prompt length: {len(prompt)} chars)")
     try:
-        response = await call_llm(prompt, system_prompt)
-        logger.info(f"[LLM] Analysis response received ({len(response)} chars)")
+        document_type, confidence = await classify_document_type(markdown_content)
+        reasoning = "Classified by Jev (System One)"
     except Exception as e:
-        logger.error(f"[LLM] Content analysis failed: {e}")
-        import traceback
-        traceback.print_exc()
-        response = ""
-    result = extract_json_from_response(response)
+        logger.warning(f"[LLM] Jev classification unavailable, using heuristic: {e}")
+        document_type = _classify_heuristic(markdown_content, parsed)
+        confidence = 0.5
+        reasoning = "Fallback to heuristic analysis"
 
-    # Provide defaults if parsing failed
-    if not result:
-        parsed = parse_markdown(markdown_content)
-        result = {
-            "document_type": _classify_heuristic(markdown_content, parsed),
-            "title": parsed.get("title", "Untitled"),
-            "entities": {"technologies": [], "tools": [], "languages": [], "concepts": []},
-            "confidence": 0.5,
-            "reasoning": "Fallback to heuristic analysis"
-        }
+    result = {
+        "document_type": document_type,
+        "title": parsed.get("title", "Untitled"),
+        "entities": _extract_entities(markdown_content),
+        "confidence": confidence,
+        "reasoning": reasoning,
+    }
 
-    logger.info(f"[LLM] Content analyzed: {result.get('document_type', 'unknown')}")
+    logger.info(f"[LLM] Content analyzed: {result['document_type']}")
     return result
 
 

@@ -162,9 +162,158 @@ def extract_source_items(body: str) -> list[tuple[str, str]]:
     return [(kind, text) for kind, text in items if text]
 
 
+_LEADING_MARKER_RE = re.compile(r"^([ \t]*)(#{1,6}[ \t]+|[-*+][ \t]+|>[ \t]+)(?=\S)")
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_UNDERSCORE_RE = re.compile(r"(?<!\w)__(.+?)__(?!\w)", re.DOTALL)
+_ITALIC_RE = re.compile(r"(?<![*\w])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![*\w])")
+_CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
+_URL_RE = re.compile(r"(?:https?://|www\.)[^\s*`]+", re.IGNORECASE)
+# A marker is followed by a number / sign / currency: it is a comparison or value ("> 10", "+ 5%", "- 3"), not markup.
+_VALUE_START_RE = re.compile(r"[\d\u0660-\u0669\u06f0-\u06f9$\u20ac\u00a3\u00a5+\-~<>=]")
+# Props that hold machine values, never display text: left untouched.
+_RAW_PROP_KEYS = frozenset({
+    "url", "imageUrl", "code", "language", "spec", "videoUrl", "thumbnailUrl", "videoId", "href", "src",
+})
+# Props whose value is a short figure: leading symbols are part of the value, never list/quote markup.
+_VALUE_PROP_KEYS = frozenset({"value", "change", "unit"})
+
+
+def _strip_leading_markers(text: str) -> str:
+    """Remove a list/heading/quote marker from each multi-word prose line; keep value-like lines whole."""
+    def one(line: str) -> str:
+        m = _LEADING_MARKER_RE.match(line)
+        if not m:
+            return line
+        rest = line[m.end():]
+        words = rest.split()
+        single_hash = m.group(2).strip() == "#"
+        if _VALUE_START_RE.match(rest) or len(words) < 2 or (single_hash and len(words) < 3):
+            return line
+        return m.group(1) + rest
+
+    return "\n".join(one(line) for line in text.split("\n"))
+
+
+def strip_inline_markdown(text: str, *, markers: bool = True) -> str:
+    """
+    Drop markdown syntax (line-start `#`/`-`/`>` markers on multi-word prose lines, **bold**, __bold__,
+    *italic*, `code`) and keep every word. The blocks have no inline-formatting slot, so a literal marker
+    would render as text. Leading symbols before a number, short values and URLs are never touched.
+    """
+    urls: list[str] = []
+
+    def hide(match: re.Match[str]) -> str:
+        urls.append(match.group(0))
+        return f"\x00{len(urls) - 1}\x00"
+
+    text = _URL_RE.sub(hide, text)
+    if markers:
+        text = _strip_leading_markers(text)
+    for pattern in (_BOLD_RE, _UNDERSCORE_RE, _ITALIC_RE, _CODE_SPAN_RE):
+        text = pattern.sub(r"\1", text)
+    text = text.strip()
+    return re.sub(r"\x00(\d+)\x00", lambda m: urls[int(m.group(1))], text)
+
+
 def _plain(text: str) -> str:
-    """Drop markdown emphasis markers: a bare `**Title**` line renders as a plain paragraph."""
-    return re.sub(r"\*\*(.+?)\*\*", r"\1", text).strip()
+    return strip_inline_markdown(text)
+
+
+def clean_component(component: A2UIComponent) -> A2UIComponent:
+    """Strip inline markdown from every display-text leaf of a component (code and URLs untouched)."""
+    if component.type in ("codeBlock", "figureBlock"):
+        return component
+
+    def walk(value: Any, markers: bool = True) -> Any:
+        if isinstance(value, str):
+            return strip_inline_markdown(value, markers=markers)
+        if isinstance(value, dict):
+            return {
+                k: (v if k in _RAW_PROP_KEYS else walk(v, markers and k not in _VALUE_PROP_KEYS))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [walk(v, markers) for v in value]
+        return value
+
+    component.props = walk(component.props)
+    return component
+
+
+# Prose components and the props that carry their text. Only these are ever dropped as repeats/blank.
+_PROSE_FIELDS: dict[str, tuple[str, ...]] = {
+    "tldr": ("content",),
+    "headlineCard": ("title", "summary"),
+    "calloutCard": ("title", "content"),
+    "keyTakeaways": ("title", "items"),
+    "bulletList": ("text", "items"),
+    "quoteCard": ("quote", "text"),
+}
+# A repeated piece must be at least this long to count as the same prose (not a label).
+MIN_REPEAT_CHARS = 12
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+# Props that never show as text (machine values, ids, enums): excluded from repeat matching.
+_HIDDEN_PROP_KEYS = _RAW_PROP_KEYS | frozenset({"type", "id", "zone", "platform", "trend", "changeType", "level"})
+
+
+def _leaf_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() if k not in _HIDDEN_PROP_KEYS for s in _leaf_strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _leaf_strings(v)]
+    return []
+
+
+def _prose_pieces(component: A2UIComponent) -> list[str] | None:
+    """Normalised non-empty text pieces of a prose component; None for every other type."""
+    fields = _PROSE_FIELDS.get(component.type)
+    if fields is None:
+        return None
+    return [p for f in fields for s in _leaf_strings(component.props.get(f)) if (p := _norm(s))]
+
+
+def drop_empty_components(components: list[A2UIComponent]) -> list[A2UIComponent]:
+    """Remove prose components whose visible text props are ALL blank (they render as an empty placeholder)."""
+    return [c for c in components if _prose_pieces(c) != []]
+
+
+def drop_repeated_prose(components: list[A2UIComponent]) -> list[A2UIComponent]:
+    """
+    Keep each stretch of prose once. A prose component whose every text piece already appears inside
+    another kept component is redundant (a paragraph split into headline + callout + takeaways, then
+    gap-filled again as a whole). Longest components are kept first; the survivor moves to the position
+    of the first fragment it absorbed, so the text keeps its place in the section. Nothing is reworded.
+    """
+    pieces = [_prose_pieces(c) for c in components]
+    haystack = ["\n".join(_norm(s) for s in _leaf_strings(c.props)) for c in components]
+    kept = {i for i, p in enumerate(pieces) if p is None or max(map(len, p), default=0) < MIN_REPEAT_CHARS}
+    position = {i: i for i in range(len(components))}
+    droppable = sorted(
+        (i for i in range(len(components)) if i not in kept),
+        key=lambda i: (-sum(map(len, pieces[i] or [])), i),
+    )
+    for i in droppable:
+        owners = []
+        for piece in pieces[i] or []:
+            pattern = re.compile(r"(?<!\w)" + re.escape(piece) + r"(?!\w)")
+            owner = next((k for k in sorted(kept) if pattern.search(haystack[k])), None)
+            if owner is None:
+                break
+            owners.append(owner)
+        else:
+            for owner in owners:
+                if pieces[owner] is not None:  # only prose survivors may move
+                    position[owner] = min(position[owner], i)
+            continue
+        kept.add(i)
+    return [components[i] for i in sorted(kept, key=lambda i: (position[i], i))]
 
 
 def _bullet_list(texts: list[str]) -> A2UIComponent:
@@ -250,9 +399,12 @@ async def _build_section(
     for spec in expand_fn(specs):
         component = build_fn(spec, analysis)
         if component:
-            built.append(apply_fn(component, spec))
+            built.append(clean_component(apply_fn(component, spec)))
 
-    return [*heading, *built, *coverage_components(body, built)]
+    # Reason: coverage runs on the built components; the repeat/blank pass then runs over everything
+    # (LLM output + gap-fill) so a paragraph split across components and gap-filled whole shows once.
+    body_components = drop_repeated_prose(drop_empty_components([*built, *coverage_components(body, built)]))
+    return [*heading, *body_components]
 
 
 def _opening(preamble: str) -> list[A2UIComponent]:

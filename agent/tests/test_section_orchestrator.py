@@ -240,3 +240,225 @@ async def test_section_selector_allows_empty_selection(monkeypatch):
         analysis, layout, "## T\n\n### heading only", allow_empty=True) == []
     with pytest.raises(ValueError, match="no components"):
         await llm_orchestrator.select_components_with_llm(analysis, layout, "## T\n\ntext")
+
+
+# --- t_48d8a80a: inline markdown markers, repeated prose, empty text -------------------------------
+
+def _comp(type_: str, **props) -> A2UIComponent:
+    return A2UIComponent(type=type_, id="x", props=props, zone="content")
+
+
+def _all_strings(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _all_strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _all_strings(v)]
+    return []
+
+
+def test_strip_inline_markdown_removes_markers_but_keeps_words():
+    from section_orchestrator import strip_inline_markdown
+
+    assert strip_inline_markdown("**المشكلة والحل**: تقدم الفكرة") == "المشكلة والحل: تقدم الفكرة"
+    assert strip_inline_markdown("- **Lead**: body") == "Lead: body"
+    assert strip_inline_markdown("### خطوات عملية") == "خطوات عملية"
+    assert strip_inline_markdown("1. **Core problem**") == "1. Core problem"  # numbering is source text
+    assert strip_inline_markdown("__bold__ and `code` and *it*") == "bold and code and it"
+    assert strip_inline_markdown("2 * 3 = 6 and a*b") == "2 * 3 = 6 and a*b"  # math/asterisks untouched
+
+
+def test_clean_component_strips_every_text_leaf_except_code():
+    from section_orchestrator import clean_component
+
+    callout = clean_component(_comp("calloutCard", title="1. **Core**", content="**Lead**: body"))
+    assert callout.props == {"title": "1. Core", "content": "Lead: body"}
+    takeaways = clean_component(_comp("keyTakeaways", items=["- **A**: x", "**B**: y"]))
+    assert takeaways.props["items"] == ["A: x", "B: y"]
+    bullets = clean_component(_comp("bulletList", items=[{"text": "**A**: x"}]))
+    assert bullets.props["items"] == [{"text": "A: x"}]
+    table = clean_component(_comp("dataTable", headers=["**H**"], rows=[["**c**", "d"]]))
+    assert table.props == {"headers": ["H"], "rows": [["c", "d"]]}
+    code = clean_component(_comp("codeBlock", code="x = **kwargs", language="python"))
+    assert code.props["code"] == "x = **kwargs"
+    link = clean_component(_comp("linkPreview", url="https://a.b/__x__", title="**T**"))
+    assert link.props["url"] == "https://a.b/__x__" and link.props["title"] == "T"
+
+
+VERDICT = "«واعد» — تشير الفكرة إلى فرصة جيدة في السوق السعودي. ويمكن لخدمات تصميم المواقع تلبية احتياجات هذا القطاع."
+
+
+def test_fragments_of_a_paragraph_are_dropped_and_the_whole_takes_the_first_fragment_position():
+    from section_orchestrator import drop_repeated_prose
+
+    first, second = VERDICT.split(". ")[0] + ".", VERDICT.split(". ")[1]
+    comps = [
+        _comp("heading", text="التقييم المبدئي", level=2),
+        _comp("headlineCard", title=first, summary=""),
+        _comp("calloutCard", title="", content=second),
+        _comp("keyTakeaways", items=[first, second]),
+        _comp("statCard", title="x", value="1"),
+        _comp("bulletList", items=[{"text": VERDICT}]),
+    ]
+    out = drop_repeated_prose(comps)
+    assert [c.type for c in out] == ["heading", "bulletList", "statCard"]
+    assert sum(s.count("تشير الفكرة") for c in out for s in _all_strings(c.props)) == 1
+    assert out[1].props["items"][0]["text"] == VERDICT
+
+
+def test_repeated_prose_keeps_distinct_text_and_non_prose():
+    from section_orchestrator import drop_repeated_prose
+
+    comps = [
+        _comp("calloutCard", title="", content="a completely different first sentence here"),
+        _comp("calloutCard", title="", content="another completely different sentence there"),
+        _comp("dataTable", headers=["h"], rows=[["an unrelated table cell with other words"]]),
+        _comp("headlineCard", title="short", summary=""),
+    ]
+    assert drop_repeated_prose(comps) == comps
+
+
+def test_blank_prose_components_are_dropped():
+    from section_orchestrator import drop_empty_components
+
+    comps = [
+        _comp("tldr", content="  "),
+        _comp("calloutCard", title=" ", content=""),
+        _comp("keyTakeaways", items=["", " "]),
+        _comp("bulletList", items=[{"text": ""}]),
+        _comp("heading", text="H", level=2),
+        _comp("tldr", content="real"),
+    ]
+    assert [c.type for c in drop_empty_components(comps)] == ["heading", "tldr"]
+
+
+@pytest.mark.asyncio
+async def test_section_output_has_no_markers_and_states_each_sentence_once():
+    body = f"{VERDICT}\n\n- **عنوان**: نص تفصيلي طويل بما يكفي ليكون بندا"
+
+    async def select(analysis, layout, md, extra):
+        s1, s2 = VERDICT.split(". ")[0] + ".", VERDICT.split(". ")[1]
+        return [
+            {"component_type": "tldr", "props": {"content": VERDICT}},
+            {"component_type": "headlineCard", "props": {"title": s1}},
+            {"component_type": "calloutCard", "props": {"content": s2}},
+            {"component_type": "bulletList", "props": {"items": ["- **عنوان**: نص تفصيلي طويل بما يكفي ليكون بندا"]}},
+        ]
+
+    md = "# T\n\n" + "\n\n".join(f"## S{i}\n\n{body}" for i in range(4))
+    from llm_orchestrator import apply_layout_and_zone, build_a2ui_component, expand_component_specs
+
+    out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
+    text = "\n".join(s for c in out for s in _all_strings(c.props))
+    assert "**" not in text
+    assert text.count("تشير الفكرة") == 4  # once per section
+    assert text.count("نص تفصيلي طويل") == 4
+
+
+# --- t_48d8a80a review 2: no text may be lost or changed ------------------------------------------
+
+def test_markers_never_eat_comparison_symbols_or_short_values():
+    from section_orchestrator import strip_inline_markdown
+
+    for kept in ("> 10 مليون", "+ 5%", "- 3", "# of users", "> 5", "- 3 items left", "- 3"):
+        assert strip_inline_markdown(kept) == kept
+    assert strip_inline_markdown("> a quoted prose line here") == "a quoted prose line here"
+
+
+def test_markers_stripped_on_every_line_and_bold_spans_newlines():
+    from section_orchestrator import strip_inline_markdown
+
+    assert strip_inline_markdown("- first prose line\n- second prose line") == "first prose line\nsecond prose line"
+    assert strip_inline_markdown("**bold across\nlines** after") == "bold across\nlines after"
+
+
+def test_urls_and_machine_keys_are_untouched():
+    from section_orchestrator import clean_component, strip_inline_markdown
+
+    assert strip_inline_markdown("https://a.b/__init__/x") == "https://a.b/__init__/x"
+    assert strip_inline_markdown("see **https://a.b/__init__** now") == "see https://a.b/__init__ now"
+    props = {"videoUrl": "https://v.x/__a__", "thumbnailUrl": "https://v.x/__t__", "videoId": "__id__",
+             "href": "/__x__", "src": "/__y__", "title": "**T**"}
+    out = clean_component(_comp("videoEmbed", **props)).props
+    assert {k: out[k] for k in props if k != "title"} == {k: v for k, v in props.items() if k != "title"}
+    assert out["title"] == "T"
+
+
+def test_stat_values_keep_leading_symbols():
+    from section_orchestrator import clean_component
+
+    out = clean_component(_comp("statCard", value="> 10 million users here", label="- a label of words", change="+ 5%"))
+    assert out.props["value"] == "> 10 million users here" and out.props["change"] == "+ 5%"
+    assert out.props["label"] == "a label of words"
+
+
+def test_repeat_match_respects_word_boundaries():
+    from section_orchestrator import drop_repeated_prose
+
+    a = _comp("calloutCard", title="", content="5% growth in 2024 vs prior")
+    b = _comp("calloutCard", title="", content="15% growth in 2024 vs prior")
+    assert drop_repeated_prose([a, b]) == [a, b]
+    c = _comp("calloutCard", title="", content="نمو ٥٪ في عام ٢٠٢٤ مقارنة")
+    d = _comp("calloutCard", title="", content="نمو ١٥٪ في عام ٢٠٢٤ مقارنة")
+    assert drop_repeated_prose([c, d]) == [c, d]
+    whole = _comp("calloutCard", title="", content="Revenue: 5% growth in 2024 vs prior, then more")
+    assert drop_repeated_prose([a, whole]) == [whole]
+
+
+def test_repeat_haystack_ignores_non_visible_props():
+    from section_orchestrator import drop_repeated_prose
+
+    prose = _comp("calloutCard", title="", content="a long enough sentence here")
+    other = _comp("linkPreview", url="a long enough sentence here", title="x")
+    assert drop_repeated_prose([prose, other]) == [prose, other]
+
+
+def test_empty_drop_keeps_components_with_any_visible_text():
+    from section_orchestrator import drop_empty_components
+
+    head = _comp("headlineCard", title="", summary="summary text kept")
+    callout = _comp("calloutCard", title="Title kept", content="")
+    blank = _comp("headlineCard", title=" ", summary="")
+    assert drop_empty_components([head, callout, blank]) == [head, callout]
+
+
+FIXTURE = (
+    "/Volumes/Storage 4TB SSD/Documents2/GitHub/startup45-WebApp-v1/.workspace/project-management/reports/"
+    "e2e-free-tool-2026-10-16/analyze-run3-edited.md"
+)
+
+
+@pytest.mark.asyncio
+async def test_every_source_number_survives_the_cleanup_pipeline():
+    import os
+    import re
+
+    if not os.path.exists(FIXTURE):
+        pytest.skip("fixture report not available")
+    from llm_orchestrator import apply_layout_and_zone, build_a2ui_component, expand_component_specs
+
+    md = open(FIXTURE, encoding="utf-8").read()
+    _, sections = split_report(md)
+
+    async def select(analysis, layout, text, extra):
+        # LLM mock: split the section into sentence-sized components copying text (markdown included).
+        specs = []
+        for _, item in extract_source_items(text.split("\n\n", 1)[-1]):
+            sentences = [s for s in re.split(r"(?<=[.؟!])\s+", item) if s.strip()]
+            for i, s in enumerate(sentences):
+                kind = ("headlineCard", "calloutCard", "keyTakeaways", "bulletList")[i % 4]
+                props = {
+                    "headlineCard": {"title": s}, "calloutCard": {"content": f"**{s}**"},
+                    "keyTakeaways": {"items": [f"- {s}"]}, "bulletList": {"items": [{"text": s}]},
+                }[kind]
+                specs.append({"component_type": kind, "props": props})
+            specs.append({"component_type": "tldr", "props": {"content": item}})  # whole-item repeat
+        return specs or [{"component_type": "tldr", "props": {"content": ""}}]
+
+    out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
+    visible = " ".join(s for c in out for s in _all_strings({k: v for k, v in c.props.items() if k not in ("url",)}))
+    numbers = re.findall(r"\d[\d,.]*%?|[٠-٩][٠-٩,.٫]*٪?", md)
+    assert numbers, "fixture should contain numbers"
+    missing = [n for n in set(numbers) if n.strip(",.") not in visible]
+    assert not missing, missing
