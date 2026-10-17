@@ -1040,3 +1040,11 @@ def test_variant_wording_is_snapped_back_to_the_exact_source_text():
     assert both.props["content"] == f"{S1} {S2}"
     assert digits.props["items"] == ["ينمو القطاع بنسبة ٥٠٪ سنويا."]
     assert other.props["content"] == "نص آخر لا علاقة له بالمصدر أبدا"
+
+
+def test_source_units_stays_linear_on_a_huge_item():
+    # Reason: every sentence run was enumerated (O(n^2) keys of O(n) length) — a 120k-char item exhausted memory.
+    from section_orchestrator import _source_units
+    body = " ".join(f"جملة رقم {i} في فقرة طويلة." for i in range(3000))
+    units = _source_units(body)
+    assert len(units) <= 3000 * 6 + 1

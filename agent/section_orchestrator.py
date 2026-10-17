@@ -726,6 +726,9 @@ def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UICompo
     return [*tables, *(_bullet_list(items) for items in (evidence, rest) if items)]
 
 
+MAX_SENTENCE_RUN = 6  # longest run of consecutive sentences matched as one card text
+
+
 def _source_units(body: str) -> dict[str, str]:
     """folded text -> exact source text, for every run of consecutive sentences within a source item (a label line counts as one) and every whole item."""
     units: dict[str, str] = {}
@@ -736,8 +739,9 @@ def _source_units(body: str) -> dict[str, str]:
 
     for _, lines in _source_item_lines(body):
         sentences = [s for line in lines for s in _sentences(line)]
+        # Reason: bound the run length — enumerating every run is O(n^2) keys of O(n) length (memory DoS on long items).
         for i in range(len(sentences)):
-            for j in range(i, len(sentences)):
+            for j in range(i, min(len(sentences), i + MAX_SENTENCE_RUN)):
                 add(" ".join(sentences[i:j + 1]))
         add(" ".join(lines))
     return units
