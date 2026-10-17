@@ -47,6 +47,9 @@ def _choice(criteria: dict[str, str]) -> dict:
 
 async def classify_document_type(markdown: str) -> tuple[str, float]:
     """Return (document_type, averaged probability). Raises JevUnavailable when there is no usable answer."""
+    # Reason: local runs on the Codex backend skip the OpenRouter Jev call; the caller falls back to the heuristic.
+    if os.getenv("JEV_DISABLED") == "1":
+        raise JevUnavailable("JEV_DISABLED=1")
     key = os.getenv("OPENROUTER_API_KEY")
     if not key:
         raise JevUnavailable("OPENROUTER_API_KEY is not set")

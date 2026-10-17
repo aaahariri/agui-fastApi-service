@@ -61,6 +61,7 @@ from a2ui_generator import (
 from logger import logger
 from content_analyzer import parse_markdown, ContentAnalysis, _classify_heuristic, _extract_entities
 from jev_classifier import classify_document_type
+from codex_backend import backend_is_codex, call_codex
 from prompts import (
     VERBATIM_COPY_RULE,
     format_content_analysis_prompt,
@@ -144,6 +145,9 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
     Returns:
         The LLM response text
     """
+    if backend_is_codex():
+        return await call_codex(prompt, system_prompt)
+
     api_key = os.getenv("OPENROUTER_API_KEY")
     # Reason: GENERATE_MODEL (env: .env locally, Modal secret in prod) wins over the legacy OPENROUTER_MODEL.
     model = os.getenv("GENERATE_MODEL") or os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")

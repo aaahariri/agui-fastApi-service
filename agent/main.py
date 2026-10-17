@@ -23,6 +23,7 @@ from agent import agent, DashboardState, run_direct_pipeline
 from pydantic_ai.ag_ui import StateDeps
 from logger import logger, reset_log_file
 from section_orchestrator import MAX_INPUT_CHARS
+from codex_backend import refuse_codex_when_deployed
 
 # Configuration
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
@@ -41,6 +42,7 @@ def require_api_key_when_deployed(api_key: str) -> None:
 
 
 require_api_key_when_deployed(API_KEY)
+refuse_codex_when_deployed()  # LLM_BACKEND=codex is local-only: fail at startup on Modal/Railway/Cloud Run
 
 
 def verify_api_key(request: Request) -> JSONResponse | None:
