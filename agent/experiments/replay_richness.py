@@ -168,6 +168,10 @@ async def main(path, show):
     print("BUILD_ERRORS", _build_errors["n"], "SKIPS", _build_errors["skip"])
     titled = [(g, [bool((c.props.get("title") or c.props.get("label") or "").strip()) for c in cs]) for g, cs in ((g, [c for c in comps if (c.layout or {}).get("group") == g]) for g in rows)]
     print("TITLE_PARITY_VIOLATIONS", sum(1 for _, t in titled if len(set(t)) > 1))
+    repeated = sum(1 for a, b in zip(comps, comps[1:]) if (t := (a.props.get("title") or "").strip()) and t == (b.props.get("title") or "").strip())
+    print("REPEATED_TITLES", repeated)
+    mixed = sum(1 for g in rows if len({c.type == "stepCard" for c in comps if (c.layout or {}).get("group") == g}) > 1)
+    print("MIXED_STEP_ROWS", mixed)
     if show:
         print("GAPFILLED", len(gapped)); [print("  +", g) for g in gapped]
         print("DROPPED", len(dropped))

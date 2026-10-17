@@ -1154,3 +1154,43 @@ def test_latin_brand_check_is_linear_on_a_huge_token():
     t0 = time.perf_counter()
     has_evidence(text)
     assert time.perf_counter() - t0 < 1.0
+
+
+# --- repeated titles on cards split from one source paragraph; steps rows hold steps only ----------
+
+def test_repeated_title_stays_on_first_card_of_one_source_paragraph():
+    from section_orchestrator import dedupe_repeated_titles
+
+    s1, s2, s3 = "الجملة الأولى من الفقرة هنا.", "الجملة الثانية من الفقرة هنا.", "الجملة الثالثة من الفقرة هنا."
+    body = f"المشكلة الجوهرية\n\n{s1} {s2} {s3}\n\nفقرة أخرى مختلفة تماما."
+    comps = [_comp("calloutCard", type="info", title="المشكلة الجوهرية", content=s) for s in (s1, s2, s3)]
+    out = dedupe_repeated_titles(comps, body)
+    assert [c.props["title"] for c in out] == ["المشكلة الجوهرية", "", ""]
+    assert [c.props["content"] for c in out] == [s1, s2, s3]
+
+
+def test_same_title_over_different_source_items_is_kept():
+    from section_orchestrator import dedupe_repeated_titles
+
+    a, b = "نص الفقرة الأولى كاملا.", "نص الفقرة الثانية كاملا."
+    comps = [_comp("calloutCard", title="مؤشرات", content=a), _comp("calloutCard", title="مؤشرات", content=b)]
+    out = dedupe_repeated_titles(comps, f"مؤشرات\n\n{a}\n\nمؤشرات\n\n{b}")
+    assert [c.props["title"] for c in out] == ["مؤشرات", "مؤشرات"]
+
+
+def test_non_consecutive_or_untraceable_repeats_are_untouched():
+    from section_orchestrator import dedupe_repeated_titles
+
+    a = "نص الفقرة الأولى كاملا."
+    comps = [_comp("calloutCard", title="ت", content=a), _comp("bulletList", items=[{"text": "x"}]), _comp("calloutCard", title="ت", content="نص غير موجود في المصدر")]
+    out = dedupe_repeated_titles(comps, f"ت\n\n{a}")
+    assert [c.props.get("title") for c in out if c.type == "calloutCard"] == ["ت", "ت"]
+
+
+def test_step_cards_never_share_a_row_with_other_cards():
+    from section_orchestrator import group_short_rows
+
+    mixed = group_short_rows([_comp("calloutCard", title="أ", content="نص قصير"), _comp("stepCard", title="ب", description="نص قصير")], "s1")
+    assert _groups(mixed) == [None, None]
+    steps = group_short_rows([_comp("stepCard", title="أ", description="نص قصير"), _comp("stepCard", title="ب", description="نص قصير")], "s1")
+    assert _groups(steps)[0] and _groups(steps)[0] == _groups(steps)[1]

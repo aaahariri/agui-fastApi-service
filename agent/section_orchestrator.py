@@ -590,6 +590,31 @@ def place_labels_before_bodies(components: list[A2UIComponent], body: str) -> li
     return out
 
 
+def dedupe_repeated_titles(components: list[A2UIComponent], body: str) -> list[A2UIComponent]:
+    """
+    One source paragraph split over several cards repeats the same title on each. Consecutive cards with the
+    same title (normalised) whose other text comes from the same source item keep the title on the first card
+    only; the title text stays once and no body text changes. Anything not traceable to one item is left alone.
+    """
+    items = [_fold(" ".join(lines)) for _, lines in _source_item_lines(body)]
+
+    def item_of(component: A2UIComponent) -> int | None:
+        rest = _fold(" ".join(_leaf_strings({k: v for k, v in component.props.items() if k != "title"})))
+        return next((i for i, t in enumerate(items) if rest and rest in t), None)
+
+    first: A2UIComponent | None = None  # the card that carries the title of the current repeat run
+    for component in components:
+        title = component.props.get("title")
+        key = _fold(title) if isinstance(title, str) else ""
+        if key and first is not None and key == _fold(first.props["title"]):
+            at = item_of(component)
+            if at is not None and at == item_of(first):
+                component.props = {**component.props, "title": ""}
+                continue
+        first = component if key else None
+    return components
+
+
 # Types the web can place inside a columnLayout (COMPOSABLE_TYPES in lib/utils/agui-block-mapping.ts).
 _ROW_TYPES = frozenset({"statCard", "stepCard", "headlineCard", "profileCard", "calloutCard", "linkPreview", "keyTakeaways"})
 ROW_MAX_CARDS = 4
@@ -618,7 +643,7 @@ def _is_row_card(component: A2UIComponent) -> bool:
 
 # Card families that sit well side by side; every other type pairs only with its own type.
 _STAT_FAMILY = frozenset({"statCard"})
-_TEXT_FAMILY = frozenset({"calloutCard", "keyTakeaways", "headlineCard", "stepCard"})
+_TEXT_FAMILY = frozenset({"calloutCard", "keyTakeaways", "headlineCard"})  # stepCard is its own family: steps pair only with steps
 _TITLE_KEYS = ("title", "label", "headline")
 ROW_MAX_LENGTH_RATIO = 2
 
@@ -1066,7 +1091,7 @@ async def _build_section(
     ordered = order_by_source(drop_duplicate_components([*heading, *body_components]), body)
     if late := order_violations(body, ordered):
         logger.warning(f"[ORDER] section {title!r}: {len(late)} sentence(s) still out of source order: {[s[:40] for s in late[:3]]}")
-    return group_short_rows(ordered, section_id)
+    return group_short_rows(dedupe_repeated_titles(ordered, body), section_id)
 
 
 def _opening(preamble: str) -> list[A2UIComponent]:
