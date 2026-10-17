@@ -469,22 +469,92 @@ def drop_steps_echoed_by_lists(components: list[A2UIComponent]) -> list[A2UIComp
     return [c for i, c in enumerate(components) if i not in drop]
 
 
+def _label_and_body(component: A2UIComponent, source_keys: list[str]) -> tuple[str, str] | None:
+    """
+    (label, first body line) of a component that labels a body: a title-only headlineCard (body = the
+    source line that follows the label) or a calloutCard holding a title and its own content.
+    """
+    props = component.props
+    if component.type == "headlineCard" and isinstance(props.get("title"), str):
+        label = _key(props["title"])
+        if label and not any(_key(s) for s in _leaf_strings(props.get("summary"))) and label in source_keys:
+            at = source_keys.index(label)
+            if at + 1 < len(source_keys):
+                return label, source_keys[at + 1]
+    if component.type == "calloutCard" and isinstance(props.get("title"), str) and isinstance(props.get("content"), str):
+        label, content = _key(props["title"]), _key(props["content"])
+        if label and content:
+            return label, content
+    return None
+
+
+def place_labels_before_bodies(components: list[A2UIComponent], body: str) -> list[A2UIComponent]:
+    """
+    A label card must come before the body it labels. `drop_repeated_prose` moves a whole-section
+    survivor up to its first absorbed fragment, which can leave the label card behind it. When the label's
+    body is shown by an EARLIER component: inside a bulletList the label becomes the list item right before
+    that body (the card is removed, its text stays once); otherwise the card moves in front of that component.
+    Order of everything else and every word are untouched.
+    """
+    source_keys = [k for line in body.splitlines() if (k := _key(line))]
+    out = list(components)
+    i = 0
+    while i < len(out):
+        pair = _label_and_body(out[i], source_keys)
+        i += 1
+        if pair is None:
+            continue
+        label, first_line = pair
+        k = next((j for j in range(i - 1) if first_line in "\n".join(_key(s) for s in _leaf_strings(out[j].props))), None)
+        if k is None:
+            continue
+        card, owner = out[i - 1], out[k]
+        items = owner.props.get("items") if owner.type == "bulletList" else None
+        if isinstance(items, list) and all(isinstance(it, dict) and isinstance(it.get("text"), str) for it in items):
+            at = next((n for n, it in enumerate(items) if first_line in _key(it["text"])), None)
+            if at is not None:
+                if at == 0 or _key(items[at - 1]["text"]) != label:
+                    owner.props = {**owner.props, "items": [*items[:at], {"text": label}, *items[at:]]}
+                del out[i - 1]
+                i -= 1
+                continue
+        del out[i - 1]
+        out.insert(k, card)
+    return out
+
+
 # Types the web can place inside a columnLayout (COMPOSABLE_TYPES in lib/utils/agui-block-mapping.ts).
-_ROW_TYPES = frozenset({"statCard", "stepCard", "headlineCard", "profileCard", "calloutCard", "linkPreview"})
+_ROW_TYPES = frozenset({"statCard", "stepCard", "headlineCard", "profileCard", "calloutCard", "linkPreview", "keyTakeaways"})
 ROW_MAX_CARDS = 4
 ROW_MAX_CHARS = 220
+# Cards up to ROW_MAX_HALF_CHARS fit a half-width column. layout.width is NOT consulted: the selector
+# stamps "full" on nearly every card (run 7), so honouring it would leave rows empty. A row holding a card
+# longer than ROW_MAX_CHARS keeps at most ROW_MAX_LONG_CARDS cards (each column is ~half a reading line).
+ROW_MAX_HALF_CHARS = 450
+ROW_MAX_LONG_CARDS = 3
+
+
+def _card_chars(component: A2UIComponent) -> int:
+    return len(_norm(" ".join(_leaf_strings(component.props))))
+
+
+def _is_label_card(component: A2UIComponent) -> bool:
+    """A title-only headlineCard labels the body after it: it heads a stretch, it is never a row member."""
+    return component.type == "headlineCard" and not any(_norm(s) for s in _leaf_strings(component.props.get("summary")))
 
 
 def _is_row_card(component: A2UIComponent) -> bool:
-    if component.type not in _ROW_TYPES:
+    if component.type not in _ROW_TYPES or _is_label_card(component):
         return False
-    return len(_norm(" ".join(_leaf_strings(component.props)))) <= ROW_MAX_CHARS
+    return _card_chars(component) <= ROW_MAX_HALF_CHARS
 
 
 def group_short_rows(components: list[A2UIComponent], section_id: str) -> list[A2UIComponent]:
     """
-    Mark runs of 2-4 consecutive short composable cards as one side-by-side row via `layout.group`.
-    Longer runs split into balanced rows (never a lone card). Order and content are never changed.
+    Mark runs of 2-4 consecutive half-width-sized cards as one side-by-side row via `layout.group`.
+    A heading, a label card, a long prose block (> ROW_MAX_HALF_CHARS) or any non-card component ends a run; a run with a
+    mid-size card holds at most 3 per row. Longer runs split into balanced rows (never a lone
+    card). Order and content are never changed.
     """
     runs: list[list[int]] = []
     current: list[int] = []
@@ -499,7 +569,9 @@ def group_short_rows(components: list[A2UIComponent], section_id: str) -> list[A
     for run in runs:
         if len(run) < 2:
             continue
-        rows = -(-len(run) // ROW_MAX_CARDS)
+        longest = max(_card_chars(components[k]) for k in run)
+        per_row = ROW_MAX_CARDS if longest <= ROW_MAX_CHARS else ROW_MAX_LONG_CARDS
+        rows = -(-len(run) // per_row)
         base, extra = divmod(len(run), rows)
         start = 0
         for r in range(rows):
@@ -609,6 +681,8 @@ async def _build_section(
     # Reason: paraphrased LLM text is dropped BEFORE coverage so gap-fill restores the verbatim source.
     built = drop_untraceable_components(built, body)
     body_components = drop_repeated_prose(drop_empty_components([*built, *coverage_components(body, built)]))
+    # Reason: the repeat pass can leave a label card behind the body it labels.
+    body_components = place_labels_before_bodies(body_components, body)
     # Reason: after the repeat pass, because it can move a survivor next to the cards that echo it.
     body_components = drop_steps_echoed_by_lists(body_components)
     return group_short_rows(drop_duplicate_components([*heading, *body_components]), section_id)

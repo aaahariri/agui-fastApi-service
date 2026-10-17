@@ -707,7 +707,7 @@ def test_runs_of_short_cards_get_one_row_group_each():
 def test_long_or_prose_components_break_a_row_and_lone_cards_stay_ungrouped():
     from section_orchestrator import group_short_rows
 
-    long_callout = _short("calloutCard", "كلمة " * 60)
+    long_callout = _short("calloutCard", "كلمة " * 100)
     out = group_short_rows([_short("statCard"), long_callout, _short("statCard"), _short("statCard"), _comp("bulletList", items=[{"text": "x"}]), _short("calloutCard")], "s1")
     g = _groups(out)
     assert g[0] is None and g[1] is None and g[2] == g[3] and g[2] and g[4] is None and g[5] is None
@@ -726,8 +726,110 @@ def test_rows_hold_at_most_four_cards_and_never_leave_a_single():
 def test_web_non_composable_types_are_never_grouped():
     from section_orchestrator import group_short_rows
 
-    out = group_short_rows([_comp("keyTakeaways", items=["أ"]), _comp("vsCard", left="أ", right="ب"), _short("statCard")], "s1")
-    assert _groups(out) == [None, None, None]
+    out = group_short_rows([_comp("vsCard", left="أ", right="ب"), _comp("vsCard", left="أ", right="ب"), _comp("bulletList", items=[{"text": "x"}]), _short("statCard")], "s1")
+    assert _groups(out) == [None, None, None, None]
+
+
+def _half(type_: str, chars: int, **props: object) -> A2UIComponent:
+    c = _comp(type_, **props) if props else _comp(type_, content="كلمة " * (chars // 5))
+    c.layout = {"width": "full"}  # the selector stamps "full" on nearly every card; rows must not depend on it
+    return c
+
+
+def test_run7_section_shape_pairs_key_takeaways_with_callout_after_the_label_card():
+    """Run 7 (clip 3182): headlineCard -> keyTakeaways(half) -> calloutCard(half) -> bullet list; nothing grouped."""
+    from section_orchestrator import group_short_rows
+
+    label = _comp("headlineCard", title="تقييم وصف الفكرة", summary="")
+    takeaways = _half("keyTakeaways", 0, title="", items=["كلمة " * 38])
+    callout = _half("calloutCard", 0, type="info", title="مؤشرات الجدوى", content="كلمة " * 60)
+    bullets = _comp("bulletList", items=[{"text": "تسعير"}])
+    out = group_short_rows([label, takeaways, callout, bullets], "s2")
+    g = _groups(out)
+    assert g[0] is None and g[3] is None
+    assert g[1] == g[2] == "s2-row-1"
+    assert [c.type for c in out] == ["headlineCard", "keyTakeaways", "calloutCard", "bulletList"]
+
+
+def test_long_half_cards_hold_at_most_three_per_row_without_a_lone_card():
+    from section_orchestrator import group_short_rows
+
+    for n, sizes in ((3, [3]), (4, [2, 2]), (5, [2, 3]), (7, [2, 2, 3])):
+        out = group_short_rows([_half("calloutCard", 400) for _ in range(n)], "s1")
+        counts = sorted(len([c for c in out if (c.layout or {}).get("group") == g]) for g in set(_groups(out)))
+        assert counts == sizes, (n, counts)
+
+
+def test_a_long_prose_card_and_a_heading_break_the_row_and_width_hint_is_ignored():
+    from section_orchestrator import group_short_rows
+
+    long_full = _comp("calloutCard", content="كلمة " * 100)
+    heading = _comp("heading", text="ع", level=2)
+    out = group_short_rows([_short("statCard"), long_full, _short("statCard"), heading, _short("calloutCard"), _short("statCard")], "s1")
+    g = _groups(out)
+    assert g[:4] == [None] * 4 and g[4] == g[5] and g[4]
+
+
+def test_label_card_is_never_a_row_member_but_a_news_headline_with_summary_is():
+    from section_orchestrator import group_short_rows
+
+    news = lambda: _comp("headlineCard", title="عنوان", summary="ملخص")  # noqa: E731
+    out = group_short_rows([_comp("headlineCard", title="شدة المشكلة", summary=""), news(), news()], "s1")
+    assert _groups(out) == [None, "s1-row-1", "s1-row-1"]
+
+
+SEC_BODY = (
+    "فرصة السوق\n\nتتمثل الفجوة في الحاجة المتزايدة إلى حضور قوي على الإنترنت.\n\n"
+    "العملاء المحتملون\n\nالعملاء هم مكاتب المحاماة والشركات الاستشارية في السعودية. وتناسبهم الخدمة لاعتيادهم على الاستشارات.\n\n"
+    "إشارات الطلب\n\nمن المؤشرات الأولية نمو عدد الشركات القانونية والاستشارية في السعودية. كما يزداد تنافس هذه المؤسسات على الظهور الرقمي.\n\n"
+    "لماذا الآن\n\nيعد التوقيت مناسبا في ظل التحول الرقمي المتسارع في السعودية."
+)
+
+
+def test_callout_label_left_behind_by_a_moved_survivor_is_placed_before_its_body():
+    """Run 7 live shape: a whole-section list absorbed the fragments and moved up; 'إشارات الطلب' trailed it."""
+    from section_orchestrator import place_labels_before_bodies
+
+    body_line = "من المؤشرات الأولية نمو عدد الشركات القانونية والاستشارية في السعودية. كما يزداد تنافس هذه المؤسسات على الظهور الرقمي."
+    survivor = _comp("bulletList", items=[
+        {"text": "تتمثل الفجوة في الحاجة المتزايدة إلى حضور قوي على الإنترنت."},
+        {"text": "العملاء هم مكاتب المحاماة والشركات الاستشارية في السعودية. وتناسبهم الخدمة لاعتيادهم على الاستشارات."},
+        {"text": body_line},
+        {"text": "لماذا الآن"},
+        {"text": "يعد التوقيت مناسبا في ظل التحول الرقمي المتسارع في السعودية."},
+    ])
+    comps = [
+        _comp("headlineCard", title="فرصة السوق", summary=""),
+        survivor,
+        _comp("calloutCard", type="info", title="إشارات الطلب", content="من المؤشرات الأولية نمو عدد الشركات"),
+    ]
+    out = place_labels_before_bodies(comps, SEC_BODY)
+    assert [c.type for c in out] == ["headlineCard", "bulletList"]
+    texts = [i["text"] for i in out[1].props["items"]]
+    assert texts.index("إشارات الطلب") + 1 == texts.index(body_line)
+
+
+def test_label_headline_trailing_the_list_that_holds_its_body_is_moved_into_it():
+    from section_orchestrator import place_labels_before_bodies
+
+    body = "المشكلة الجوهرية\n\nتعاني مكاتب المحاماة من غياب مواقع احترافية فعالة.\n\nشدة المشكلة\n\nتكتسب هذه المشكلة أهمية كبيرة لدى الشريحة المستهدفة."
+    comps = [
+        _comp("bulletList", items=[{"text": "تعاني مكاتب المحاماة من غياب مواقع احترافية فعالة."}, {"text": "تكتسب هذه المشكلة أهمية كبيرة لدى الشريحة المستهدفة."}]),
+        _comp("headlineCard", title="شدة المشكلة", summary=""),
+    ]
+    out = place_labels_before_bodies(comps, body)
+    assert [c.type for c in out] == ["bulletList"]
+    assert [i["text"] for i in out[0].props["items"]][1] == "شدة المشكلة"
+
+
+def test_label_headline_before_its_body_and_label_over_a_non_list_owner():
+    from section_orchestrator import place_labels_before_bodies
+
+    body = "الوضوح\n\nالفكرة واضحة عمومًا وتقدم خدمة محددة للعملاء."
+    ok = [_comp("headlineCard", title="الوضوح", summary=""), _comp("tldr", content="الفكرة واضحة عمومًا وتقدم خدمة محددة للعملاء.")]
+    assert place_labels_before_bodies(ok, body) == ok
+    late = [ok[1], ok[0]]
+    assert [c.type for c in place_labels_before_bodies(late, body)] == ["headlineCard", "tldr"]
 
 
 @pytest.mark.asyncio
@@ -766,3 +868,28 @@ async def test_step_cards_echoing_a_gap_filled_list_are_dropped_in_the_pipeline(
     out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
     assert not [c for c in out if c.type == "stepCard"]
     assert t1 in " ".join(s for c in out for s in _all_strings(c.props))
+
+
+@pytest.mark.asyncio
+async def test_run7_pipeline_keeps_labels_before_bodies_pairs_half_cards_and_loses_no_line():
+    """Selector echoes the run-7 failure: fragments + a label card; the whole-section gap-fill moves up."""
+    from llm_orchestrator import apply_layout_and_zone, build_a2ui_component, expand_component_specs
+
+    md = "# T\n\n" + "\n\n".join(f"## قسم {i}\n\nنص عادي رقم {i} للقسم" for i in range(1, 4)) + "\n\n## فرصة السوق والعملاء المحتملون\n\n" + SEC_BODY
+
+    async def select(analysis, layout, text, extra):
+        if "إشارات الطلب" not in text:
+            return [{"component_type": "tldr", "props": {"content": ln}} for ln in text.split("\n\n")[1:] if ln.strip()]
+        return [
+            {"component_type": "headlineCard", "props": {"title": "فرصة السوق", "summary": ""}},
+            {"component_type": "keyTakeaways", "props": {"title": "", "items": ["العملاء هم مكاتب المحاماة والشركات الاستشارية في السعودية."]}, "layout": {"width": "half"}},
+            {"component_type": "calloutCard", "props": {"type": "info", "title": "إشارات الطلب", "content": "من المؤشرات الأولية نمو عدد الشركات القانونية والاستشارية في السعودية."}, "layout": {"width": "half"}},
+        ]
+
+    out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
+    visible = _line_key(" ".join(s for c in out for s in _all_strings({k: v for k, v in c.props.items() if k != "url"})))
+    assert [ln for ln in _source_lines(md) if ln not in " ".join(visible.split())] == []
+    flat = [(c.type, _all_strings(c.props)) for c in out]
+    label_at = next(n for n, (t, st) in enumerate(flat) if "إشارات الطلب" in st)
+    body_at = next(n for n, (t, st) in enumerate(flat) if any("من المؤشرات الأولية" in x for x in st))
+    assert label_at <= body_at
