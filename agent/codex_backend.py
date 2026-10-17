@@ -18,6 +18,18 @@ DEFAULT_MAX_CONCURRENCY = 2
 _RATE_LIMIT_RE = re.compile(r"rate|limit|quota|usage|429|too many", re.IGNORECASE)
 _DEPLOY_MARKERS = ("MODAL_ENVIRONMENT", "MODAL_TASK_ID", "MODAL_IS_REMOTE", "RAILWAY_ENVIRONMENT", "K_SERVICE")
 
+# Reason: the model reads untrusted web content, so it must have no tools (prompt injection -> file read/exfiltration).
+# Verified on codex-cli 0.153.4: with the default flags `cat <file>`/`ls ~` succeed; with these flags no shell,
+# patch, image-read, MCP/app or multi-agent tool is exposed and the code-mode `exec` tool fails closed.
+HARDENING_ARGS = [
+    "--ignore-user-config", "--ignore-rules",
+    *[a for f in ("shell_tool", "unified_exec", "code_mode_host", "code_mode", "apps", "plugins", "browser_use",
+                  "browser_use_external", "computer_use", "image_generation", "multi_agent", "multi_agent_v2",
+                  "hooks", "skill_search", "in_app_browser") for a in ("--disable", f)],
+    "-c", 'web_search="disabled"', "-c", "include_apply_patch_tool=false", "-c", "tools.view_image=false",
+]
+_CHILD_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TMPDIR", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE")
+
 _semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
 
 
@@ -25,21 +37,35 @@ class CodexError(Exception):
     """The Codex CLI call failed (non-zero exit, turn.failed/error event, empty reply, or timeout)."""
 
 
+def _deploy_marker() -> str | None:
+    return next((m for m in _DEPLOY_MARKERS if os.getenv(m)), None)
+
+
+def resolved_backend() -> str:
+    """LLM_BACKEND if set; else openrouter on a deployed host (cloud marker present), codex locally."""
+    explicit = os.getenv("LLM_BACKEND", "").strip().lower()
+    if explicit:
+        return explicit
+    return "openrouter" if _deploy_marker() else "codex"
+
+
 def backend_is_codex() -> bool:
-    return os.getenv("LLM_BACKEND", "openrouter").strip().lower() == "codex"
+    return resolved_backend() == "codex"
 
 
 def refuse_codex_when_deployed() -> None:
     """Raise RuntimeError if LLM_BACKEND=codex on a deployed host: the CLI login is a personal subscription."""
     if not backend_is_codex():
         return
-    marker = next((m for m in _DEPLOY_MARKERS if os.getenv(m)), None)
+    marker = _deploy_marker()
     if marker:
         raise RuntimeError(f"LLM_BACKEND=codex is local-only and must not run when deployed ({marker} is set)")
 
 
-def codex_model() -> str:
-    """CODEX_MODEL if set, else GENERATE_MODEL/OPENROUTER_MODEL with any `vendor/` prefix stripped."""
+def codex_model(model_override: str | None = None) -> str:
+    """Per-call override (COMPONENT_MODEL), else CODEX_MODEL, else GENERATE_MODEL/OPENROUTER_MODEL; `vendor/` prefix stripped."""
+    if model_override:
+        return model_override.split("/", 1)[-1]
     explicit = os.getenv("CODEX_MODEL")
     if explicit:
         return explicit
@@ -84,15 +110,27 @@ def _combine(prompt: str, system_prompt: str) -> str:
     return f"=== SYSTEM INSTRUCTIONS ===\n{system_prompt}\n\n=== USER REQUEST ===\n{prompt}"
 
 
+def _isolated_env(home: str) -> dict[str, str]:
+    """Child env: a throwaway CODEX_HOME holding only a link to the ChatGPT login, and none of our secrets."""
+    real_home = os.getenv("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    auth = os.path.join(real_home, "auth.json")
+    if os.path.exists(auth):
+        os.symlink(auth, os.path.join(home, "auth.json"))
+    env = {k: os.environ[k] for k in _CHILD_ENV_KEYS if k in os.environ}
+    env.update(CODEX_HOME=home, HOME=home)
+    return env
+
+
 async def _run_once(model: str, effort: str | None, stdin_prompt: str) -> tuple[str, str]:
     args = [shutil.which("codex") or "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--json", "-m", model]
     if effort:
         args += ["-c", f'model_reasoning_effort="{effort}"']
-    args += ["--sandbox", "read-only", "-"]
+    args += [*HARDENING_ARGS, "--sandbox", "read-only", "-"]
     # Reason: empty temp cwd so the agent has nothing to read or modify.
-    with tempfile.TemporaryDirectory(prefix="codex-llm-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="codex-llm-") as cwd, tempfile.TemporaryDirectory(prefix="codex-home-") as home:
+        env = _isolated_env(home)
         proc = await asyncio.create_subprocess_exec(
-            *args, cwd=cwd, stdin=asyncio.subprocess.PIPE,
+            *args, cwd=cwd, env=env, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
@@ -107,10 +145,10 @@ async def _run_once(model: str, effort: str | None, stdin_prompt: str) -> tuple[
     return "", event_error or (f"exit {proc.returncode}: {stderr_tail}" if proc.returncode else "no agent_message")
 
 
-async def call_codex(prompt: str, system_prompt: str = "") -> str:
+async def call_codex(prompt: str, system_prompt: str = "", model_override: str | None = None) -> str:
     """Run one prompt through the Codex CLI. temperature/max_tokens do not apply."""
     refuse_codex_when_deployed()
-    model = codex_model()
+    model = codex_model(model_override)
     effort = os.getenv("OPENROUTER_REASONING_EFFORT") or None
     stdin_prompt = _combine(prompt, system_prompt)
     print(f"[llm] backend=codex model={model} reasoning_effort={effort}", flush=True)

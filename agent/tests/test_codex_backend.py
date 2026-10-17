@@ -92,8 +92,8 @@ def test_call_llm_uses_codex_and_no_http(monkeypatch):
     assert "SYS" in stdin and "USER" in stdin and stdin.index("SYS") < stdin.index("USER")
 
 
-def test_default_backend_is_openrouter(monkeypatch):
-    monkeypatch.delenv("LLM_BACKEND", raising=False)
+def test_explicit_openrouter_works_locally(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "openrouter")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
         asyncio.run(llm_orchestrator.call_llm("x"))
@@ -186,3 +186,105 @@ def test_jev_disabled_skips_http_and_uses_heuristic(monkeypatch):
         asyncio.run(jev_classifier.classify_document_type("# Hi\n\nbody"))
     result = asyncio.run(llm_orchestrator.analyze_content_with_llm("# Hi\n\nbody"))
     assert result["reasoning"] == "Fallback to heuristic analysis"
+
+
+def test_hardening_flags_env_and_cwd(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLM_BACKEND", "codex")
+    monkeypatch.setenv("GENERATE_MODEL", "m")
+    monkeypatch.setenv("API_KEY", "super-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-secret")
+    fake_home = tmp_path / "realcodex"
+    fake_home.mkdir()
+    (fake_home / "auth.json").write_text("{}")
+    (fake_home / "config.toml").write_text("x")
+    monkeypatch.setenv("CODEX_HOME", str(fake_home))
+    seen = {}
+
+    async def fake_exec(*args, **kwargs):
+        import os
+        seen["args"], seen["kwargs"] = args, kwargs
+        home = kwargs["env"]["CODEX_HOME"]
+        seen["home_files"] = sorted(os.listdir(home))
+        seen["cwd_files"] = os.listdir(kwargs["cwd"])
+        return FakeProc(OK)
+
+    monkeypatch.setattr(codex_backend.asyncio, "create_subprocess_exec", fake_exec)
+    assert asyncio.run(llm_orchestrator.call_llm("x")) == "hello"
+    args, env = list(seen["args"]), seen["kwargs"]["env"]
+    for flag in ("--ignore-user-config", "--ignore-rules"):
+        assert flag in args
+    disabled = {args[i + 1] for i, a in enumerate(args) if a == "--disable"}
+    assert {"shell_tool", "unified_exec", "code_mode_host", "apps", "plugins", "multi_agent"} <= disabled
+    assert 'web_search="disabled"' in args and "include_apply_patch_tool=false" in args and "tools.view_image=false" in args
+    assert args[args.index("--sandbox") + 1] == "read-only"
+    assert seen["home_files"] == ["auth.json"] and seen["cwd_files"] == []
+    assert env["CODEX_HOME"] != str(fake_home) and "API_KEY" not in env and "OPENROUTER_API_KEY" not in env
+
+
+@pytest.mark.parametrize("marker", ["MODAL_ENVIRONMENT", "MODAL_TASK_ID", "MODAL_IS_REMOTE", "RAILWAY_ENVIRONMENT", "K_SERVICE"])
+def test_unset_backend_is_openrouter_on_cloud(monkeypatch, marker):
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
+    monkeypatch.setenv(marker, "1")
+    assert codex_backend.resolved_backend() == "openrouter"
+    codex_backend.refuse_codex_when_deployed()  # no error
+
+
+def test_unset_backend_is_codex_locally(monkeypatch):
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
+    assert codex_backend.resolved_backend() == "codex"
+    assert codex_backend.backend_is_codex()
+
+
+def test_explicit_openrouter_wins_locally_and_explicit_codex_refused_on_cloud(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "openrouter")
+    assert codex_backend.resolved_backend() == "openrouter"
+    monkeypatch.setenv("LLM_BACKEND", "codex")
+    monkeypatch.setenv("K_SERVICE", "x")
+    with pytest.raises(RuntimeError):
+        codex_backend.refuse_codex_when_deployed()
+
+
+def test_component_model_override_codex(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "codex")
+    monkeypatch.setenv("GENERATE_MODEL", "openai/gpt-5.6-sol")
+    monkeypatch.setenv("CODEX_MODEL", "gpt-5.6-sol")
+    assert codex_backend.codex_model("openai/gpt-5.6-luna") == "gpt-5.6-luna"
+    assert codex_backend.codex_model(None) == "gpt-5.6-sol"
+
+
+def _spy_select(monkeypatch, component_model):
+    seen = {}
+
+    async def fake_call(prompt, system_prompt="", max_tokens=4000, temperature=0.7, model=None):
+        seen["model"] = model
+        return json.dumps({"components": []})
+
+    monkeypatch.setattr(llm_orchestrator, "call_llm", fake_call)
+    if component_model:
+        monkeypatch.setenv("COMPONENT_MODEL", component_model)
+    asyncio.run(llm_orchestrator.select_components_with_llm({}, {}, "# t\n\nbody", allow_empty=True))
+    return seen.get("model")
+
+
+def test_select_components_uses_component_model(monkeypatch):
+    assert _spy_select(monkeypatch, "openai/gpt-5.6-luna") == "openai/gpt-5.6-luna"
+
+
+def test_select_components_falls_back_to_default_model(monkeypatch):
+    assert _spy_select(monkeypatch, None) is None
+
+
+def test_component_model_reaches_openrouter_payload(monkeypatch):
+    import httpx
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.setenv("GENERATE_MODEL", "openai/gpt-5.6-sol")
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(llm_orchestrator.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    asyncio.run(llm_orchestrator.call_llm("x", model="openai/gpt-5.6-luna"))
+    assert seen["model"] == "openai/gpt-5.6-luna"

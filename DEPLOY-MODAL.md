@@ -26,15 +26,20 @@ Prints the `https://<workspace>--agui-generate-web.modal.run` URL. Set in the we
 - Verify: `curl -s <url>/health`, then a real `POST <url>/api/generate` with `curl -L -H "Authorization: Bearer $API_KEY"`.
 
 ## Local testing uses Codex, not OpenRouter
-Local runs can use the founder's ChatGPT/Codex subscription (`codex login status` must say "Logged in using ChatGPT")
-so no OpenRouter credits are spent. From `agent/`:
+With `LLM_BACKEND` unset the service uses the Codex CLI locally (the founder's ChatGPT/Codex subscription; `codex login status`
+must say "Logged in using ChatGPT") and OpenRouter on Modal/Railway/Cloud Run (it detects their env markers), so the Modal
+deploy needs no new env. From `agent/`:
 
 ```
-LLM_BACKEND=codex JEV_DISABLED=1 uv run uvicorn main:app --port 8000
+uv run uvicorn main:app --port 8000                      # codex (default locally)
+LLM_BACKEND=openrouter uv run uvicorn main:app --port 8000   # intentional OpenRouter test
+JEV_DISABLED=1 uv run uvicorn ...                        # optional: skip the (cheap) Jev OpenRouter call
 ```
 
-- `LLM_BACKEND=codex` runs `codex exec` per LLM call (one per `##` section: ~6 free preview, ~12 premium), at most
-  `CODEX_MAX_CONCURRENCY` (default 2) at a time; expect minutes per report. `CODEX_MODEL` overrides the model.
-- `JEV_DISABLED=1` skips the Jev OpenRouter call (heuristic document type).
-- The service refuses to start with `LLM_BACKEND=codex` when a Modal/Railway/Cloud Run marker is set. Never put
-  `LLM_BACKEND=codex` in the Modal secret `agui-generate-secrets`.
+- Startup logs the resolved backend. An explicit `LLM_BACKEND=codex` on a cloud host refuses to start.
+- Codex runs one `codex exec` per LLM call (one per `##` section: ~6 free preview, ~12 premium), at most
+  `CODEX_MAX_CONCURRENCY` (default 2) at a time. `CODEX_MODEL` overrides the model.
+- Each call runs with every tool disabled (no shell, patch, image, MCP/app, web search), `--ignore-user-config`, an empty cwd,
+  a throwaway `CODEX_HOME` that only links `auth.json`, and a minimal child environment (no API keys).
+- `COMPONENT_MODEL` sets the model for per-section component selection (OpenRouter id on Modal, e.g. `openai/gpt-5.6-luna`;
+  prefix stripped for Codex). Unset = `GENERATE_MODEL`. Set it in the Modal secret `agui-generate-secrets` if wanted.

@@ -132,7 +132,7 @@ COMPONENT_DEFAULT_WIDTHS = {
 }
 
 
-async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000, temperature: float = 0.7) -> str:
+async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000, temperature: float = 0.7, model: str | None = None) -> str:
     """
     Call OpenRouter LLM API with the given prompt.
 
@@ -141,16 +141,17 @@ async def call_llm(prompt: str, system_prompt: str = "", max_tokens: int = 4000,
         system_prompt: Optional system prompt
         max_tokens: Maximum tokens in the response
         temperature: Sampling temperature (lower = more precise)
+        model: Optional model override for this call (default: GENERATE_MODEL / OPENROUTER_MODEL)
 
     Returns:
         The LLM response text
     """
     if backend_is_codex():
-        return await call_codex(prompt, system_prompt)
+        return await call_codex(prompt, system_prompt, model_override=model)
 
     api_key = os.getenv("OPENROUTER_API_KEY")
     # Reason: GENERATE_MODEL (env: .env locally, Modal secret in prod) wins over the legacy OPENROUTER_MODEL.
-    model = os.getenv("GENERATE_MODEL") or os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
+    model = model or os.getenv("GENERATE_MODEL") or os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.6")
 
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY not set in environment")
@@ -406,7 +407,8 @@ Return JSON with "components" array."""
 
     logger.info(f"[LLM] Selecting components... (prompt length: {len(prompt)} chars)")
     try:
-        response = await call_llm(prompt, system_prompt, max_tokens=16000, temperature=0.4)
+        # Reason: picking components is easy; COMPONENT_MODEL lets it use a cheaper model than GENERATE_MODEL.
+        response = await call_llm(prompt, system_prompt, max_tokens=16000, temperature=0.4, **({"model": m} if (m := os.getenv("COMPONENT_MODEL")) else {}))
         logger.info(f"[LLM] Response received ({len(response)} chars)")
     except Exception as e:
         logger.error(f"[LLM] Component selection failed: {e}")
