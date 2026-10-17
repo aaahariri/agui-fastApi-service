@@ -205,14 +205,17 @@ _NOT_A_NAME = "في|من|على|إلى|التي|الذي|تعمل|تقدم|ذا�
 _ORG_NAME_RE = re.compile(rf"(?<!\w)(?:{_ORG_NOUNS})\s+(?!(?:{_NOT_A_NAME})(?!\w))[\u0621-\u064aA-Za-z0-9]{{2,}}")
 _ARABIC_RE = re.compile(r"[\u0600-\u06ff]")
 # A Latin brand inside Arabic text: any Latin word of 3+ letters with a capital (WhatsApp, iPhone, Careem).
-_LATIN_BRAND_RE = re.compile(r"(?<![A-Za-z])(?=[A-Za-z0-9&.-]*[A-Z])[A-Za-z][A-Za-z0-9&.-]{2,}")
+# Reason: match whole tokens then test case in Python — a lookahead here was quadratic on hyphen/dot runs.
+_LATIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9&.-]{2,}")
 
 
 def has_evidence(text: str) -> bool:
     """True when the text carries a number, currency, date, URL or named entity worth keeping verbatim."""
     if _EVIDENCE_RE.search(text) or _NAMED_RE.search(text) or _QUOTED_NAME_RE.search(text) or _ORG_NAME_RE.search(text):
         return True
-    return bool(_ARABIC_RE.search(text) and _LATIN_BRAND_RE.search(text))
+    if not _ARABIC_RE.search(text):
+        return False
+    return any(any(c.isupper() for c in m.group(0)) for m in _LATIN_TOKEN_RE.finditer(text))
 
 
 def _source_item_lines(body: str) -> list[tuple[str, list[str]]]:

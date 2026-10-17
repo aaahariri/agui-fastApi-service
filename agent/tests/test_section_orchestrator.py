@@ -1143,3 +1143,13 @@ def test_section_instructions_nudge_card_variety_positively():
     text = SECTION_INSTRUCTIONS.lower()
     assert "use the card type that fits each piece" in text
     assert "avoid using one type for everything" in text
+
+
+def test_latin_brand_check_is_linear_on_a_huge_token():
+    # Reason: a lookahead regex re-scanned the rest of a long [a-z…] run at every start position (quadratic).
+    import time
+    from section_orchestrator import has_evidence
+    text = "نص عربي " + "a" * 200_000 + " " + "a-" * 50_000
+    t0 = time.perf_counter()
+    has_evidence(text)
+    assert time.perf_counter() - t0 < 1.0
