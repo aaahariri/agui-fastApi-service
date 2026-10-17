@@ -694,7 +694,7 @@ def test_runs_of_short_cards_get_one_row_group_each():
     from section_orchestrator import group_short_rows
 
     three = [_short("statCard"), _short("statCard"), _short("statCard")]
-    pair = [_short("statCard"), _short("calloutCard")]
+    pair = [_short("statCard"), _short("statCard")]
     heading = _comp("heading", text="عنوان", level=2)
     out = group_short_rows([*three, heading, *pair], "s2")
     g = _groups(out)
@@ -736,8 +736,8 @@ def _half(type_: str, chars: int, **props: object) -> A2UIComponent:
     return c
 
 
-def test_run7_section_shape_pairs_key_takeaways_with_callout_after_the_label_card():
-    """Run 7 (clip 3182): headlineCard -> keyTakeaways(half) -> calloutCard(half) -> bullet list; nothing grouped."""
+def test_run7_section_shape_untitled_takeaways_and_titled_callout_are_not_paired():
+    """Run 7 (clip 3182): an untitled keyTakeaways next to a titled calloutCard looked broken; they stay full width."""
     from section_orchestrator import group_short_rows
 
     label = _comp("headlineCard", title="تقييم وصف الفكرة", summary="")
@@ -746,8 +746,7 @@ def test_run7_section_shape_pairs_key_takeaways_with_callout_after_the_label_car
     bullets = _comp("bulletList", items=[{"text": "تسعير"}])
     out = group_short_rows([label, takeaways, callout, bullets], "s2")
     g = _groups(out)
-    assert g[0] is None and g[3] is None
-    assert g[1] == g[2] == "s2-row-1"
+    assert g == [None, None, None, None]
     assert [c.type for c in out] == ["headlineCard", "keyTakeaways", "calloutCard", "bulletList"]
 
 
@@ -765,7 +764,7 @@ def test_a_long_prose_card_and_a_heading_break_the_row_and_width_hint_is_ignored
 
     long_full = _comp("calloutCard", content="كلمة " * 100)
     heading = _comp("heading", text="ع", level=2)
-    out = group_short_rows([_short("statCard"), long_full, _short("statCard"), heading, _short("calloutCard"), _short("statCard")], "s1")
+    out = group_short_rows([_short("statCard"), long_full, _short("statCard"), heading, _short("statCard"), _short("statCard")], "s1")
     g = _groups(out)
     assert g[:4] == [None] * 4 and g[4] == g[5] and g[4]
 
@@ -893,3 +892,151 @@ async def test_run7_pipeline_keeps_labels_before_bodies_pairs_half_cards_and_los
     label_at = next(n for n, (t, st) in enumerate(flat) if "إشارات الطلب" in st)
     body_at = next(n for n, (t, st) in enumerate(flat) if any("من المؤشرات الأولية" in x for x in st))
     assert label_at <= body_at
+
+
+# --- round 4: normalised traceability, sentence-level coverage, compatible rows -------------------------
+
+def test_traceability_survives_diacritics_punctuation_digits_and_list_markers():
+    from section_orchestrator import drop_untraceable_components
+
+    body = "- الفكرة واضحة نسبيًا؛ فهي تقدم خدمة تصميم مواقع احترافية.\n- ينمو القطاع بنسبة ٥٠٪ سنويا في «السعودية» اليوم."
+    variants = [
+        "الفكرة واضحة نسبيا، فهي تقدم خدمة تصميم مواقع احترافية",  # no diacritics, ، for ؛, no final dot
+        "الفكـــرة واضحة نسبيًا؛ فهي تقدم خدمة تصميم مواقع احترافية.",  # tatweel
+        "ينمو القطاع بنسبة 50٪ سنويا في \"السعودية\" اليوم",  # Latin digits, plain quotes
+        "الفكرة واضحة نسبيًا؛   فهي تقدم خدمة تصميم مواقع احترافية. ينمو القطاع بنسبة ٥٠٪ سنويا في «السعودية» اليوم.",  # two items re-joined
+    ]
+    for text in variants:
+        c = _comp("calloutCard", title="", content=text)
+        assert drop_untraceable_components([c], body) == [c], text
+
+
+def test_a_real_paraphrase_is_still_dropped():
+    from section_orchestrator import drop_untraceable_components
+
+    body = "- الفكرة واضحة نسبيًا؛ فهي تقدم خدمة تصميم مواقع احترافية."
+    para = _comp("calloutCard", title="", content="تبدو الفكرة جلية وتقدم خدمة لتصميم المواقع بشكل محترف")
+    assert drop_untraceable_components([para], body) == []
+
+
+def test_sentences_split_across_cards_count_as_covered_and_a_line_with_a_missing_sentence_is_filled_whole():
+    body = f"{S1} {S2} {S3}"
+    split = [_comp("headlineCard", title=S1, summary=""), _comp("calloutCard", title="", content=S2), _comp("tldr", content=S3)]
+    assert coverage_components(body, split) == []
+    gap = coverage_components(body, split[:2])
+    assert [i["text"] for i in gap[0].props["items"]] == [body]
+
+
+def test_diacritic_variants_count_as_covered():
+    body = f"{S1}"
+    variant = _comp("calloutCard", title="", content=S1.replace("ً", "").replace("؛", "،"))
+    assert coverage_components(body, [variant]) == []
+
+
+def _titled(type_: str, text: str = "نص قصير", title: str = "عنوان") -> A2UIComponent:
+    key = {"statCard": "label", "calloutCard": "content", "keyTakeaways": "items"}[type_]
+    props = {key: [text] if type_ == "keyTakeaways" else text}
+    if type_ == "statCard":
+        props["value"] = "42"
+    else:
+        props["title"] = title
+    return _comp(type_, **props)
+
+
+def _untitled(type_: str, text: str = "نص قصير") -> A2UIComponent:
+    c = _titled(type_, text, title="")
+    if type_ == "statCard":
+        c.props["label"] = ""
+    return c
+
+
+def test_titled_and_untitled_cards_are_never_paired():
+    from section_orchestrator import group_short_rows
+
+    out = group_short_rows([_titled("calloutCard"), _untitled("calloutCard")], "s1")
+    assert _groups(out) == [None, None]
+    out = group_short_rows([_titled("calloutCard"), _titled("calloutCard", title="آخر")], "s1")
+    assert _groups(out) == ["s1-row-1", "s1-row-1"]
+
+
+def test_stat_cards_pair_with_stat_cards_and_text_cards_with_text_cards_only():
+    from section_orchestrator import group_short_rows
+
+    out = group_short_rows([_titled("statCard", "أ"), _titled("statCard", "ب"), _titled("calloutCard"), _titled("keyTakeaways")], "s1")
+    g = _groups(out)
+    assert g[0] == g[1] == "s1-row-1" and g[2] == g[3] == "s1-row-2"
+    out = group_short_rows([_titled("statCard", "أ"), _titled("calloutCard")], "s1")
+    assert _groups(out) == [None, None]
+
+
+def test_row_members_have_similar_length_longest_at_most_twice_shortest():
+    from section_orchestrator import group_short_rows
+
+    short, mid, longer = _titled("calloutCard", "كلمة " * 10), _titled("calloutCard", "كلمة " * 15), _titled("calloutCard", "كلمة " * 40)
+    out = group_short_rows([short, mid, longer], "s1")
+    assert _groups(out) == ["s1-row-1", "s1-row-1", None]
+    out = group_short_rows([_titled("calloutCard", "كلمة " * 10), _titled("calloutCard", "كلمة " * 40)], "s1")
+    assert _groups(out) == [None, None]
+
+
+def test_title_only_headline_card_never_joins_a_row():
+    from section_orchestrator import group_short_rows
+
+    label = _comp("headlineCard", title="عنوان", summary="")
+    out = group_short_rows([label, _titled("calloutCard"), _titled("calloutCard", title="آخر")], "s1")
+    assert _groups(out) == [None, "s1-row-1", "s1-row-1"]
+
+
+def test_partly_carried_line_gets_only_its_missing_sentence_inside_the_neighbouring_card():
+    from section_orchestrator import place_partial_lines
+
+    body = f"{S1} {S2} {S3}"
+    card = _comp("calloutCard", type="info", title="", content=f"{S1} {S2}")
+    other = _comp("statCard", label="x", value="1")
+    out = place_partial_lines(body, [card, other])
+    assert [c.type for c in out] == ["calloutCard", "statCard"]
+    assert out[0].props["content"] == f"{S1} {S2} {S3}"  # contiguous, cards kept, nothing duplicated
+    assert coverage_components(body, out) == []
+
+
+def test_missing_first_sentence_is_prepended_and_unsplittable_card_gets_a_bullet_beside_it():
+    from section_orchestrator import place_partial_lines
+
+    body = f"{S1} {S2} {S3}"
+    out = place_partial_lines(body, [_comp("calloutCard", type="info", title="", content=f"{S2} {S3}")])
+    assert [c.type for c in out] == ["calloutCard"] and out[0].props["content"] == f"{S1} {S2} {S3}"
+    stat = _comp("statCard", label=S2, value="9")  # not a prose card: gets a bulletList next to it
+    out = place_partial_lines(f"{S1} {S2}", [stat])
+    assert [c.type for c in out] == ["bulletList", "statCard"] and out[0].props["items"] == [{"text": S1}]
+
+
+def test_untouched_lines_are_left_to_the_gap_fill_and_a_missing_label_card_precedes_its_body():
+    from section_orchestrator import place_partial_lines
+
+    card = _comp("calloutCard", type="info", title="", content=S1)
+    assert place_partial_lines(f"{S2}\n\n{S3}", [card]) == [card]
+    out = place_partial_lines(f"الوضوح\n{S1}", [card])
+    assert [c.type for c in out] == ["headlineCard", "calloutCard"] and out[0].props["title"] == "الوضوح"
+
+
+def test_a_label_card_is_not_dropped_as_a_repeat_of_the_paragraph_that_contains_its_words():
+    from section_orchestrator import drop_repeated_prose
+
+    label = _comp("headlineCard", title="فرصة التميّز", summary="")
+    para = _comp("tldr", content="تتمثل فرصة التميّز في تقديم خدمة متكاملة لتصميم المواقع الاحترافية.")
+    assert drop_repeated_prose([label, para]) == [label, para]
+
+
+def test_variant_wording_is_snapped_back_to_the_exact_source_text():
+    from section_orchestrator import snap_to_source
+
+    body = f"الوضوح:\n{S1} {S2}\n- ينمو القطاع بنسبة ٥٠٪ سنويا."
+    variant = _comp("calloutCard", type="info", title="الوضوح", content=S1.replace("ً", "").replace("؛", "،").rstrip("."))
+    both = _comp("tldr", content=f"{S1} {S2}".replace("ً", ""))
+    digits = _comp("keyTakeaways", title="", items=["ينمو القطاع بنسبة 50٪ سنويا"])
+    other = _comp("tldr", content="نص آخر لا علاقة له بالمصدر أبدا")
+    snap_to_source([variant, both, digits, other], body)
+    assert variant.props["content"] == S1 and variant.props["title"] == "الوضوح"
+    assert both.props["content"] == f"{S1} {S2}"
+    assert digits.props["items"] == ["ينمو القطاع بنسبة ٥٠٪ سنويا."]
+    assert other.props["content"] == "نص آخر لا علاقة له بالمصدر أبدا"

@@ -47,7 +47,17 @@ SECTION_INSTRUCTIONS = f"""
 {VERBATIM_COPY_RULE}
 - The section heading is already rendered separately. Do NOT repeat it.
 - Use as many components as needed to hold all the text of this section; no component-count limit applies.
-- Prefer statCard/metricRow for numbers, calloutCard for key judgements, bulletList for plain lists (text unchanged).
+
+### Structure the section into cards (this replaces any earlier "collapse", "1-2 components" or "at least N types" advice)
+Read the section top to bottom. Every line goes into exactly one component, in source order; pick the card by what the text IS:
+- A figure with its label (a number, percentage, currency amount, count) -> statCard: `value` = the figure as written, `label` = the words that describe it, `title` = the label line above it when there is one.
+- A key judgement, verdict, warning or recommendation sentence -> calloutCard: the sentence goes in `content`, the label line directly above it goes in `title`.
+- 3 to 5 short parallel items (a list of strengths, risks, criteria, next steps) -> keyTakeaways: one source item per entry in `items`, the label line above as `title`.
+- Ordered actions -> stepCard, one per step. Quotes with a named author -> quoteCard. A table -> dataTable.
+- A label line followed by text becomes the `title` of the card that holds that text. Give sibling cards of one group the same shape: all titled or all untitled.
+- A paragraph of explanation -> a calloutCard or tldr holding the paragraph; a list that fits no card above -> bulletList (text unchanged).
+- Choose each card by its text; variety follows from the content, so do not pick a type to reach a count.
+- Fill only props the component defines; put the source words in those props.
 """
 
 SelectFn = Callable[[dict, dict, str, str], Awaitable[list[dict]]]
@@ -100,12 +110,41 @@ def _key(text: str) -> str:
     return _TRAILING_COLON_RE.sub("", " ".join(strip_inline_markdown(text).split()))
 
 
+_DIACRITICS_RE = re.compile("[\u0610-\u061a\u064b-\u065f\u0670\u0640\u06d6-\u06ed]")
+_DIGITS = str.maketrans("\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669"
+                        "\u06f0\u06f1\u06f2\u06f3\u06f4\u06f5\u06f6\u06f7\u06f8\u06f9", "01234567890123456789")
+_NON_WORD_RE = re.compile(r"[\W_]+")
+
+
+def _fold(text: str) -> str:
+    """
+    Matching form of a text: markdown syntax, Arabic diacritics / tatweel, punctuation (Latin and Arabic,
+    quotes included), list markers and case dropped; Arabic-Indic digits written as Latin; whitespace collapsed.
+    Used only to COMPARE texts, never to write them.
+    """
+    text = _DIACRITICS_RE.sub("", strip_inline_markdown(text)).translate(_DIGITS)
+    return _NON_WORD_RE.sub(" ", text.casefold()).strip()
+
+
+def _contains(haystack: str, needle: str) -> bool:
+    """Whole-word containment of one folded text in another."""
+    return f" {needle} " in f" {haystack} "
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.\u061f?!\u061b;])\s+|\n+")
+_CLAUSE_SPLIT_RE = re.compile(r"[.\u061f?!\u060c,\u061b;:]+(?=\s|$)|\n+")
+
+
+def _sentences(text: str) -> list[str]:
+    return [s for s in (p.strip() for p in _SENTENCE_SPLIT_RE.split(text)) if _fold(s)]
+
+
 def _coverage_leaves(components: list[A2UIComponent]) -> list[str]:
     leaves: list[str] = []
 
     def walk(value: Any) -> None:
         if isinstance(value, str):
-            if key := _key(value):
+            if key := _fold(value):
                 leaves.append(key)
         elif isinstance(value, dict):
             for k, v in value.items():
@@ -120,29 +159,35 @@ def _coverage_leaves(components: list[A2UIComponent]) -> list[str]:
     return leaves
 
 
+def _missing_sentences(line: str, leaves: list[str]) -> list[str]:
+    """Sentences of a source line that no component leaf carries (matching ignores diacritics / punctuation)."""
+    return [s for s in _sentences(line) if not any(_contains(leaf, _fold(s)) for leaf in leaves)]
+
+
 def _line_covered(line: str, leaves: list[str]) -> bool:
-    """Exact-text coverage: a sentence is inside some leaf; a label / value is a leaf or opens one."""
-    key = _key(line)
-    if not re.search(r"\w", key):
+    """A sentence-sized line is covered when each of its sentences is inside some leaf; a label / value is a leaf or opens one."""
+    key = _fold(line)
+    if not key:
         return True
     if len(key.split()) >= MIN_SUBSTRING_WORDS:
-        return any(key in leaf for leaf in leaves)
-    return any(leaf == key or (leaf.startswith(key) and leaf[len(key)] in " :\uff1a") for leaf in leaves)
+        return not _missing_sentences(line, leaves)
+    return any(leaf == key or leaf.startswith(key + " ") for leaf in leaves)
 
 
 def _label_like(line: str) -> bool:
-    return len(_key(line).split()) < MIN_SUBSTRING_WORDS
+    return len(_fold(line).split()) < MIN_SUBSTRING_WORDS
 
 
 def _uncovered_text(lines: list[str], leaves: list[str]) -> str:
-    """Text of an item that no component carries ('' when every line is covered)."""
-    if len(lines) > 1 and any(_key(" ".join(lines)) in leaf for leaf in leaves):
+    """Text of an item that no component carries ('' when every sentence is covered); the lines with a missing sentence, whole."""
+    if len(lines) > 1 and any(_contains(leaf, _fold(" ".join(lines))) for leaf in leaves):
         return ""  # a hard-wrapped paragraph kept whole
-    missing = [ln for ln in lines if not _line_covered(ln, leaves)]
+    missing_lines = [ln for ln in lines if not _line_covered(ln, leaves)]
     # Reason: a lone missing label would be appended detached from its paragraph; keep them together.
-    if missing and len(missing) < len(lines) and all(_label_like(ln) for ln in missing):
-        missing = lines
-    return " ".join(missing)
+    if missing_lines and len(missing_lines) < len(lines) and all(_label_like(ln) for ln in missing_lines):
+        return " ".join(lines)
+    # Reason: a line with any uncovered sentence is restored whole so it reads as one contiguous line.
+    return " ".join(missing_lines)
 
 
 _EVIDENCE_RE = re.compile(
@@ -349,7 +394,12 @@ def drop_repeated_prose(components: list[A2UIComponent]) -> list[A2UIComponent]:
     """
     pieces = [_prose_pieces(c) for c in components]
     haystack = ["\n".join(_norm(s) for s in _leaf_strings(c.props)) for c in components]
-    kept = {i for i, p in enumerate(pieces) if p is None or max(map(len, p), default=0) < MIN_REPEAT_CHARS}
+    # Reason: a label (every piece under MIN_SUBSTRING_WORDS words) is its own source line; finding its words
+    # inside a longer sentence does not make the label line shown, so labels are never dropped as repeats.
+    kept = {
+        i for i, p in enumerate(pieces)
+        if p is None or max(map(len, p), default=0) < MIN_REPEAT_CHARS or all(len(x.split()) < MIN_SUBSTRING_WORDS for x in p)
+    }
     position = {i: i for i in range(len(components))}
     droppable = sorted(
         (i for i in range(len(components)) if i not in kept),
@@ -394,30 +444,30 @@ _TRACE_FIELDS: dict[str, tuple[str, ...]] = {**_PROSE_FIELDS, "stepCard": ("titl
 
 
 def _source_haystack(body: str) -> str:
-    """Source as displayed text: markdown stripped line by line, hard-wrapped lines joined by a space."""
-    return _norm(" ".join(strip_inline_markdown(line) for line in body.splitlines()))
+    """Source in matching form (see `_fold`): markdown, diacritics and punctuation gone, hard wraps joined."""
+    return _fold(body)
+
+
+def _traceable_piece(piece: str, haystack: str) -> bool:
+    """Short pieces (labels) are not checked; a sentence-sized piece is traceable when every clause is in the source."""
+    if len(_fold(piece).split()) < MIN_SUBSTRING_WORDS:
+        return True
+    return all(_contains(haystack, f) for clause in _CLAUSE_SPLIT_RE.split(piece) if (f := _fold(clause)))
 
 
 def drop_untraceable_components(components: list[A2UIComponent], body: str) -> list[A2UIComponent]:
     """
-    /generate copies the source verbatim. A prose component carrying a sentence-sized piece (>= 4 words)
-    that occurs nowhere in the section source is a paraphrase: drop it; gap-fill then restores the
-    source text. Short pieces (labels) are not checked.
+    /generate copies the source verbatim. A prose component is a paraphrase when a clause of a sentence-sized
+    piece (>= 4 words) occurs nowhere in the section source, compared after normalising diacritics, punctuation,
+    quotes, list markers, whitespace and digit scripts. Splitting, re-joining or re-punctuating source text is
+    NOT a paraphrase. A paraphrase is dropped; gap-fill then restores the source text.
     """
     haystack = _source_haystack(body)
     kept: list[A2UIComponent] = []
     for component in components:
         fields = _TRACE_FIELDS.get(component.type)
-        pieces = [] if fields is None else [
-            _norm(strip_inline_markdown(s)) for f in fields for s in _leaf_strings(component.props.get(f))
-        ]
-        traceable = all(
-            len(piece.split()) < MIN_SUBSTRING_WORDS
-            or piece in haystack
-            or strip_label_colon(piece) in haystack
-            for piece in pieces
-        )
-        if traceable:
+        pieces = [] if fields is None else [s for f in fields for s in _leaf_strings(component.props.get(f))]
+        if all(_traceable_piece(piece, haystack) for piece in pieces):
             kept.append(component)
     return kept
 
@@ -549,12 +599,43 @@ def _is_row_card(component: A2UIComponent) -> bool:
     return _card_chars(component) <= ROW_MAX_HALF_CHARS
 
 
+# Card families that sit well side by side; every other type pairs only with its own type.
+_STAT_FAMILY = frozenset({"statCard"})
+_TEXT_FAMILY = frozenset({"calloutCard", "keyTakeaways", "headlineCard", "stepCard"})
+_TITLE_KEYS = ("title", "label", "headline")
+ROW_MAX_LENGTH_RATIO = 2
+
+
+def _card_shape(component: A2UIComponent) -> tuple[str, bool]:
+    """(family, titled): cards share a row only when both match."""
+    family = "stat" if component.type in _STAT_FAMILY else "text" if component.type in _TEXT_FAMILY else component.type
+    titled = any(_norm(s) for k in _TITLE_KEYS for s in _leaf_strings(component.props.get(k)))
+    return family, titled
+
+
+def _compatible_segments(run: list[int], components: list[A2UIComponent]) -> list[list[int]]:
+    """Split a run of row cards into consecutive stretches of same-shape, similar-length cards."""
+    segments: list[list[int]] = []
+    shape: tuple[str, bool] | None = None
+    lo = hi = 0
+    for k in run:
+        c_shape, chars = _card_shape(components[k]), max(_card_chars(components[k]), 1)
+        if segments and c_shape == shape and max(hi, chars) <= ROW_MAX_LENGTH_RATIO * min(lo, chars):
+            segments[-1].append(k)
+            lo, hi = min(lo, chars), max(hi, chars)
+        else:
+            segments.append([k])
+            shape, lo, hi = c_shape, chars, chars
+    return segments
+
+
 def group_short_rows(components: list[A2UIComponent], section_id: str) -> list[A2UIComponent]:
     """
-    Mark runs of 2-4 consecutive half-width-sized cards as one side-by-side row via `layout.group`.
-    A heading, a label card, a long prose block (> ROW_MAX_HALF_CHARS) or any non-card component ends a run; a run with a
-    mid-size card holds at most 3 per row. Longer runs split into balanced rows (never a lone
-    card). Order and content are never changed.
+    Mark runs of 2-4 consecutive compatible cards as one side-by-side row via `layout.group`.
+    Compatible = same family (stat-like vs text-like), both titled or both untitled, and the longest at most
+    twice the shortest. A heading, a label card, a long prose block (> ROW_MAX_HALF_CHARS) or any non-card
+    component ends a run; a stretch with a mid-size card holds at most 3 per row. Longer stretches split into
+    balanced rows (never a lone card). A card with no compatible neighbour stays alone. Order and content are never changed.
     """
     runs: list[list[int]] = []
     current: list[int] = []
@@ -566,18 +647,18 @@ def group_short_rows(components: list[A2UIComponent], section_id: str) -> list[A
         current = []
     runs.append(current)
     row = 0
-    for run in runs:
-        if len(run) < 2:
+    for segment in (seg for run in runs for seg in _compatible_segments(run, components)):
+        if len(segment) < 2:
             continue
-        longest = max(_card_chars(components[k]) for k in run)
+        longest = max(_card_chars(components[k]) for k in segment)
         per_row = ROW_MAX_CARDS if longest <= ROW_MAX_CHARS else ROW_MAX_LONG_CARDS
-        rows = -(-len(run) // per_row)
-        base, extra = divmod(len(run), rows)
+        rows = -(-len(segment) // per_row)
+        base, extra = divmod(len(segment), rows)
         start = 0
         for r in range(rows):
             size = base + (1 if r < extra else 0)
             row += 1
-            for k in run[start:start + size]:
+            for k in segment[start:start + size]:
                 components[k].layout = {**(components[k].layout or {}), "group": f"{section_id}-row-{row}"}
             start += size
     return components
@@ -645,6 +726,148 @@ def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UICompo
     return [*tables, *(_bullet_list(items) for items in (evidence, rest) if items)]
 
 
+def _source_units(body: str) -> dict[str, str]:
+    """folded text -> exact source text, for every run of consecutive sentences within a source item (a label line counts as one) and every whole item."""
+    units: dict[str, str] = {}
+
+    def add(text: str) -> None:
+        if key := _fold(text):
+            units.setdefault(key, _plain(text))
+
+    for _, lines in _source_item_lines(body):
+        sentences = [s for line in lines for s in _sentences(line)]
+        for i in range(len(sentences)):
+            for j in range(i, len(sentences)):
+                add(" ".join(sentences[i:j + 1]))
+        add(" ".join(lines))
+    return units
+
+
+def snap_to_source(components: list[A2UIComponent], body: str) -> list[A2UIComponent]:
+    """
+    Restore the exact source wording. A prose text that equals a source sentence (or run of sentences, or line)
+    apart from diacritics, punctuation, quotes, digit script or spacing is replaced by the source text itself, so
+    a faithful card never carries a re-punctuated variant. Texts that match nothing are left as they are.
+    """
+    units = _source_units(body)
+
+    def snap(value: Any, label: bool) -> Any:
+        if isinstance(value, str):
+            exact = units.get(_fold(value))
+            if exact is None or exact == _plain(value):
+                return value
+            return strip_label_colon(exact) if label else exact
+        if isinstance(value, list):
+            return [snap(v, label) for v in value]
+        if isinstance(value, dict):
+            return {k: (v if k in _RAW_PROP_KEYS or k in _HIDDEN_PROP_KEYS else snap(v, label)) for k, v in value.items()}
+        return value
+
+    for component in components:
+        for f in _PROSE_FIELDS.get(component.type, ()):
+            if f in component.props:
+                component.props = {
+                    **component.props,
+                    f: snap(component.props[f], f in _LABEL_KEYS.get(component.type, frozenset())),
+                }
+    return components
+
+
+def _covering_index(text: str, component_leaves: list[list[str]]) -> int | None:
+    """Index of the first component whose text holds `text` (folded, whole words); None when none does."""
+    key = _fold(text)
+    return next((i for i, leaves in enumerate(component_leaves) if any(_contains(leaf, key) for leaf in leaves)), None)
+
+
+def _extend_leaf(value: Any, neighbour: str, text: str, after: bool) -> tuple[Any, bool]:
+    """Join `text` onto the first string leaf that ends (after) / starts (before) with the neighbour sentence."""
+    if isinstance(value, str):
+        folded = _fold(value)
+        if folded and (folded.endswith(neighbour) if after else folded.startswith(neighbour)):
+            return (f"{value.rstrip()} {text}" if after else f"{text} {value.lstrip()}"), True
+        return value, False
+    if isinstance(value, list):
+        out = list(value)
+        for n, item in enumerate(out):
+            out[n], done = _extend_leaf(item, neighbour, text, after)
+            if done:
+                return out, True
+        return value, False
+    if isinstance(value, dict):
+        out = dict(value)
+        for k, item in value.items():
+            if k in _RAW_PROP_KEYS or k in _HIDDEN_PROP_KEYS:
+                continue
+            out[k], done = _extend_leaf(item, neighbour, text, after)
+            if done:
+                return out, True
+    return value, False
+
+
+def _extend_component(component: A2UIComponent, neighbour: str, text: str, after: bool) -> bool:
+    """Add restored source text to the prose card that holds its neighbouring sentence, keeping the line contiguous."""
+    fields = _PROSE_FIELDS.get(component.type)
+    if fields is None:
+        return False
+    for f in fields:
+        if f in component.props:
+            new, done = _extend_leaf(component.props[f], neighbour, text, after)
+            if done:
+                component.props = {**component.props, f: new}
+                return True
+    return False
+
+
+def place_partial_lines(body: str, built: list[A2UIComponent]) -> list[A2UIComponent]:
+    """
+    Keep faithful cards and restore only what they lack, next to them. A source line some card already
+    carries in part (a card holds sentences 1-2 of 3) gets its missing sentences added to the card holding the
+    neighbouring sentence (or, when that card cannot take them, as a small bulletList beside it), so the
+    line stays contiguous and the cards are not swallowed by a whole-paragraph gap-fill. A label line no
+    card carries becomes a title-only headlineCard in front of the card holding the line after it. Lines no
+    card touches are left to `coverage_components`. Nothing is reworded; the order of existing cards is untouched.
+    """
+    component_leaves = [_coverage_leaves([c]) for c in built]
+    all_leaves = [leaf for leaves in component_leaves for leaf in leaves]
+    lines = [ln for _, item in _source_item_lines(body) for ln in item]
+    inserts: list[tuple[int, int, A2UIComponent]] = []  # (position, order, component)
+    for n, line in enumerate(lines):
+        if _label_like(line):
+            following = _sentences(lines[n + 1]) if n + 1 < len(lines) else []
+            nxt = _covering_index(following[0], component_leaves) if following else None
+            if nxt is not None and not _line_covered(line, all_leaves):
+                inserts.append((nxt, n, A2UIComponent(
+                    type="headlineCard", id="headline-card", props={"title": strip_label_colon(_plain(line)), "summary": ""}, zone="content",
+                )))
+            continue
+        sentences = _sentences(line)
+        cover = [_covering_index(sent, component_leaves) for sent in sentences]
+        if not any(c is not None for c in cover) or all(c is not None for c in cover):
+            continue
+        k = 0
+        while k < len(sentences):
+            if cover[k] is not None:
+                k += 1
+                continue
+            end = k
+            while end + 1 < len(sentences) and cover[end + 1] is None:
+                end += 1
+            text = _plain(" ".join(sentences[k:end + 1]))
+            if k > 0 and cover[k - 1] is not None and _extend_component(built[cover[k - 1]], _fold(sentences[k - 1]), text, after=True):
+                pass
+            elif end + 1 < len(sentences) and cover[end + 1] is not None and _extend_component(built[cover[end + 1]], _fold(sentences[end + 1]), text, after=False):
+                pass
+            else:
+                before = next((cover[j] for j in range(k - 1, -1, -1) if cover[j] is not None), None)
+                after = next((cover[j] for j in range(end + 1, len(sentences)) if cover[j] is not None), None)
+                inserts.append((before + 1 if before is not None else after, n * 1000 + k, _bullet_list([text])))
+            k = end + 1
+    out = list(built)
+    for at, _, component in sorted(inserts, key=lambda t: (t[0], t[1]), reverse=True):
+        out.insert(at, component)
+    return out
+
+
 async def _build_section(
     title: str,
     body: str,
@@ -679,7 +902,7 @@ async def _build_section(
     # Reason: coverage runs on the built components; the repeat/blank pass then runs over everything
     # (LLM output + gap-fill) so a paragraph split across components and gap-filled whole shows once.
     # Reason: paraphrased LLM text is dropped BEFORE coverage so gap-fill restores the verbatim source.
-    built = drop_untraceable_components(built, body)
+    built = place_partial_lines(body, snap_to_source(drop_untraceable_components(built, body), body))
     body_components = drop_repeated_prose(drop_empty_components([*built, *coverage_components(body, built)]))
     # Reason: the repeat pass can leave a label card behind the body it labels.
     body_components = place_labels_before_bodies(body_components, body)

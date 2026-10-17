@@ -253,6 +253,7 @@ You STRUCTURE the document's text; you never edit it. Copy the document's text i
 - Keep the document's original language.
 - Every sentence of the document must appear, unchanged, in some component's props.
 - You decide ONLY the component types, the grouping of text into components, and their order.
+- Put each whole sentence, with its own punctuation and diacritics, into ONE prop of ONE component; start a new component only at a sentence end.
 - Use as many components as needed to hold ALL of the text; there is no component-count limit and none may be dropped to save space.
 """
 
