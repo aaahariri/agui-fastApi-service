@@ -591,6 +591,69 @@ async def test_every_source_line_survives_a_lossy_llm(name):
     assert not missing, missing
 
 
+# --- property (sentence level): no source sentence is lost, whether the LLM paraphrases or splits cards -----
+
+_DIAC = "[\u0610-\u061a\u064b-\u065f\u0670\u0640\u06d6-\u06ed]"
+
+
+def _fold_independent(text: str) -> str:
+    """Folding written independently of the pipeline (diacritics, punctuation, digits, markers, spacing)."""
+    import re
+    text = re.sub(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)", "", text.strip()).replace("*", "").replace("`", "")
+    text = re.sub(_DIAC, "", text).translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    return " ".join(re.sub(r"[\W_]+", " ", text.casefold()).split())
+
+
+def _lost_sentences(md: str, out: list) -> list[str]:
+    """Source sentences (markers stripped before splitting) absent from every single component's text (label + body together)."""
+    import re
+    texts = [" " + _fold_independent(" ".join(_all_strings({k: v for k, v in c.props.items() if k != "url"}))) + " " for c in out]
+    lost = []
+    for raw in md.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("|") or re.fullmatch(r"[-*_=\s]+", line):
+            continue
+        line = line.replace("*", "").replace("`", "")
+        for _ in range(2):  # "### 1. Heading": heading marker, then list number
+            line = re.sub(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)", "", line)
+        for sentence in re.split(r"(?<=[.\u061f?!\u061b;])\s+", line):
+            key = _fold_independent(sentence)
+            if key and not any(f" {key} " in t for t in texts):
+                lost.append(sentence[:80])
+    return lost
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["analyze-run3-edited.md", "analyze-run5-edited.md"])
+@pytest.mark.parametrize("mode", ["split_per_sentence", "paraphrase", "split_label_body"])
+async def test_no_source_sentence_is_lost_when_the_llm_splits_or_paraphrases(name, mode):
+    import os
+    import re
+
+    path = FIXTURE.replace("analyze-run3-edited.md", name)
+    if not os.path.exists(path):
+        pytest.skip("fixture report not available")
+    from llm_orchestrator import apply_layout_and_zone, build_a2ui_component, expand_component_specs
+
+    md = open(path, encoding="utf-8").read()
+
+    async def select(analysis, layout, text, extra, allow_empty=False):
+        specs = []
+        for _, item in extract_source_items(text.split("\n\n", 1)[-1]):
+            sentences = [x for x in re.split(r"(?<=[.؟!])\s+", item) if x.strip()]
+            if mode == "split_per_sentence":  # one card per sentence, punctuation and diacritics changed
+                specs += [{"component_type": "calloutCard", "props": {"title": "", "content": x.rstrip(".").replace("،", ",")}} for x in sentences]
+            elif mode == "paraphrase":  # reworded text that is not in the source
+                specs.append({"component_type": "calloutCard", "props": {"title": "", "content": "ملخص بصياغة مختلفة: " + " ".join(sentences[::-1][:1]).replace("ال", "")}})
+            else:  # "**label**: body" split into a title and a description
+                head, _, body = item.partition(":")
+                specs.append({"component_type": "stepCard", "props": {"stepNumber": 1, "title": head.strip(), "description": body.strip() or head}})
+        return specs or [{"component_type": "tldr", "props": {"content": ""}}]
+
+    out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
+    assert not _lost_sentences(md, out), _lost_sentences(md, out)
+
+
 # --- round 3: untraceable text, step/bullet echo, standalone labels, side-by-side rows ----------------
 
 V1 = "ينطوي استهداف مكاتب المحاماة والشركات الاستشارية بخدمة تصميم مواقع احترافية على إمكانات قوية."
