@@ -37,6 +37,11 @@ class CodexError(Exception):
     """The Codex CLI call failed (non-zero exit, turn.failed/error event, empty reply, or timeout)."""
 
 
+def _codex_bin() -> str:
+    """CODEX_BIN when set (another install, e.g. ChatGPT.app's bundled codex), else codex on PATH."""
+    return os.getenv("CODEX_BIN") or shutil.which("codex") or "codex"
+
+
 def _deploy_marker() -> str | None:
     return next((m for m in _DEPLOY_MARKERS if os.getenv(m)), None)
 
@@ -122,7 +127,7 @@ def _isolated_env(home: str) -> dict[str, str]:
 
 
 async def _run_once(model: str, effort: str | None, stdin_prompt: str) -> tuple[str, str]:
-    args = [shutil.which("codex") or "codex", "exec", "--ephemeral", "--skip-git-repo-check", "--json", "-m", model]
+    args = [_codex_bin(), "exec", "--ephemeral", "--skip-git-repo-check", "--json", "-m", model]
     if effort:
         args += ["-c", f'model_reasoning_effort="{effort}"']
     args += [*HARDENING_ARGS, "--sandbox", "read-only", "-"]

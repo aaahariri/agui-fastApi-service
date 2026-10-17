@@ -288,3 +288,12 @@ def test_component_model_reaches_openrouter_payload(monkeypatch):
     monkeypatch.setattr(llm_orchestrator.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
     asyncio.run(llm_orchestrator.call_llm("x", model="openai/gpt-5.6-luna"))
     assert seen["model"] == "openai/gpt-5.6-luna"
+
+
+def test_codex_bin_env_overrides_the_binary(monkeypatch):
+    # Reason: the Homebrew codex can stall at startup; CODEX_BIN points at another install (e.g. ChatGPT.app's).
+    import codex_backend
+    monkeypatch.setenv("CODEX_BIN", "/custom/codex")
+    assert codex_backend._codex_bin() == "/custom/codex"
+    monkeypatch.delenv("CODEX_BIN")
+    assert codex_backend._codex_bin()  # falls back to PATH lookup or "codex"
