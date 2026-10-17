@@ -35,9 +35,10 @@ PSEUDO_MIN_CHARS = 30000
 PSEUDO_CHUNK_CHARS = 7000
 MAX_INPUT_CHARS = 120000
 MAX_CONCURRENCY = 4
-# A source item counts as "covered" when this share of its tokens appears in
-# one component's text.
-COVERAGE_THRESHOLD = 0.6
+# A source line counts as "covered" only when its exact text (markdown and a trailing colon aside) is
+# inside one component text leaf. Lines shorter than this many words are labels / values: they must be a
+# whole leaf (or open one), never a fragment of a longer sentence.
+MIN_SUBSTRING_WORDS = 4
 
 SECTION_INSTRUCTIONS = f"""
 
@@ -89,32 +90,59 @@ def should_use_section_path(markdown: str) -> bool:
     return len(sections) >= MIN_SECTIONS or len(markdown) > PSEUDO_MIN_CHARS
 
 
-def _tokens(text: str) -> set[str]:
-    return set(re.findall(r"\w+", re.sub(r"[*_`]", "", text).lower()))
+# Props that never show as text; every other string (URLs included) counts as covered source text.
+_NON_TEXT_KEYS = frozenset({"type", "id", "zone", "trend", "changeType", "level", "sentiment"})
+_TRAILING_COLON_RE = re.compile(r"\s*[:\uff1a]+\s*$")
 
 
-def _component_text(component: A2UIComponent) -> str:
-    chunks: list[str] = []
+def _key(text: str) -> str:
+    """Comparison form of a text: markdown syntax, whitespace runs and a trailing colon removed."""
+    return _TRAILING_COLON_RE.sub("", " ".join(strip_inline_markdown(text).split()))
+
+
+def _coverage_leaves(components: list[A2UIComponent]) -> list[str]:
+    leaves: list[str] = []
 
     def walk(value: Any) -> None:
         if isinstance(value, str):
-            chunks.append(value)
+            if key := _key(value):
+                leaves.append(key)
         elif isinstance(value, dict):
-            for v in value.values():
-                walk(v)
+            for k, v in value.items():
+                if k not in _NON_TEXT_KEYS:
+                    walk(v)
         elif isinstance(value, list):
             for v in value:
                 walk(v)
 
-    walk(component.props)
-    return " ".join(chunks)
+    for component in components:
+        walk(component.props)
+    return leaves
 
 
-def _is_covered(item: str, component_tokens: list[set[str]]) -> bool:
-    wanted = _tokens(item)
-    if not wanted:
+def _line_covered(line: str, leaves: list[str]) -> bool:
+    """Exact-text coverage: a sentence is inside some leaf; a label / value is a leaf or opens one."""
+    key = _key(line)
+    if not re.search(r"\w", key):
         return True
-    return any(len(wanted & tokens) / len(wanted) >= COVERAGE_THRESHOLD for tokens in component_tokens)
+    if len(key.split()) >= MIN_SUBSTRING_WORDS:
+        return any(key in leaf for leaf in leaves)
+    return any(leaf == key or (leaf.startswith(key) and leaf[len(key)] in " :\uff1a") for leaf in leaves)
+
+
+def _label_like(line: str) -> bool:
+    return len(_key(line).split()) < MIN_SUBSTRING_WORDS
+
+
+def _uncovered_text(lines: list[str], leaves: list[str]) -> str:
+    """Text of an item that no component carries ('' when every line is covered)."""
+    if len(lines) > 1 and any(_key(" ".join(lines)) in leaf for leaf in leaves):
+        return ""  # a hard-wrapped paragraph kept whole
+    missing = [ln for ln in lines if not _line_covered(ln, leaves)]
+    # Reason: a lone missing label would be appended detached from its paragraph; keep them together.
+    if missing and len(missing) < len(lines) and all(_label_like(ln) for ln in missing):
+        missing = lines
+    return " ".join(missing)
 
 
 _EVIDENCE_RE = re.compile(
@@ -129,14 +157,14 @@ def has_evidence(text: str) -> bool:
     return bool(_EVIDENCE_RE.search(text) or _NAMED_RE.search(text))
 
 
-def extract_source_items(body: str) -> list[tuple[str, str]]:
-    """Return [("bullet"|"paragraph", text)] for every list item / prose block."""
-    items: list[tuple[str, str]] = []
+def _source_item_lines(body: str) -> list[tuple[str, list[str]]]:
+    """Return [("bullet"|"paragraph"|"row", [source lines])] for every list item / prose block."""
+    items: list[tuple[str, list[str]]] = []
     para: list[str] = []
 
     def flush() -> None:
         if para:
-            items.append(("paragraph", " ".join(para).strip()))
+            items.append(("paragraph", para.copy()))
             para.clear()
 
     for line in body.splitlines():
@@ -144,22 +172,27 @@ def extract_source_items(body: str) -> list[tuple[str, str]]:
         bullet = re.match(r"^(?:[-*+]|\d+[.)])\s+(.*)$", stripped)
         if bullet:
             flush()
-            items.append(("bullet", bullet.group(1).strip()))
+            items.append(("bullet", [bullet.group(1).strip()]))
         elif not stripped:
             flush()
         elif stripped.startswith("|"):
             flush()
             if not re.fullmatch(r"[|\s:-]+", stripped):  # table row kept; separator row dropped
-                items.append(("row", stripped))
+                items.append(("row", [stripped]))
         elif stripped.startswith("```"):
             flush()
         elif stripped.startswith("#"):
             flush()
-            items.append(("paragraph", stripped.lstrip("#").strip()))
+            items.append(("paragraph", [stripped.lstrip("#").strip()]))
         else:
             para.append(stripped)
     flush()
-    return [(kind, text) for kind, text in items if text]
+    return [(kind, lines) for kind, lines in items if any(lines)]
+
+
+def extract_source_items(body: str) -> list[tuple[str, str]]:
+    """Return [("bullet"|"paragraph"|"row", text)] for every list item / prose block."""
+    return [(kind, " ".join(lines).strip()) for kind, lines in _source_item_lines(body)]
 
 
 _LEADING_MARKER_RE = re.compile(r"^([ \t]*)(#{1,6}[ \t]+|[-*+][ \t]+|>[ \t]+)(?=\S)")
@@ -219,17 +252,40 @@ def _plain(text: str) -> str:
     return strip_inline_markdown(text)
 
 
+# Fields that hold a heading / label (never prose): a trailing colon is list-marker punctuation there.
+_LABEL_KEYS: dict[str, frozenset[str]] = {
+    "heading": frozenset({"text"}),
+    "headlineCard": frozenset({"title"}),
+    "calloutCard": frozenset({"title"}),
+    "stepCard": frozenset({"title"}),
+    "keyTakeaways": frozenset({"title"}),
+    "statCard": frozenset({"title", "label"}),
+    "metricRow": frozenset({"label"}),
+}
+
+
+def strip_label_colon(text: str) -> str:
+    """Drop a trailing ':' / full-width colon from a heading or label."""
+    return _TRAILING_COLON_RE.sub("", text)
+
+
 def clean_component(component: A2UIComponent) -> A2UIComponent:
     """Strip inline markdown from every display-text leaf of a component (code and URLs untouched)."""
     if component.type in ("codeBlock", "figureBlock"):
         return component
+
+    label_keys = _LABEL_KEYS.get(component.type, frozenset())
 
     def walk(value: Any, markers: bool = True) -> Any:
         if isinstance(value, str):
             return strip_inline_markdown(value, markers=markers)
         if isinstance(value, dict):
             return {
-                k: (v if k in _RAW_PROP_KEYS else walk(v, markers and k not in _VALUE_PROP_KEYS))
+                k: (
+                    v if k in _RAW_PROP_KEYS
+                    else strip_label_colon(walk(v, markers and k not in _VALUE_PROP_KEYS)) if k in label_keys and isinstance(v, str)
+                    else walk(v, markers and k not in _VALUE_PROP_KEYS)
+                )
                 for k, v in value.items()
             }
         if isinstance(value, list):
@@ -258,7 +314,7 @@ def _norm(text: str) -> str:
 
 
 # Props that never show as text (machine values, ids, enums): excluded from repeat matching.
-_HIDDEN_PROP_KEYS = _RAW_PROP_KEYS | frozenset({"type", "id", "zone", "platform", "trend", "changeType", "level"})
+_HIDDEN_PROP_KEYS = _RAW_PROP_KEYS | frozenset({"type", "id", "zone", "platform", "trend", "changeType", "level", "sentiment"})
 
 
 def _leaf_strings(value: Any) -> list[str]:
@@ -316,6 +372,23 @@ def drop_repeated_prose(components: list[A2UIComponent]) -> list[A2UIComponent]:
     return [components[i] for i in sorted(kept, key=lambda i: (position[i], i))]
 
 
+def drop_duplicate_components(components: list[A2UIComponent]) -> list[A2UIComponent]:
+    """
+    Keep the first of any components whose WHOLE visible text is identical (a verdict headline followed
+    by a callout holding only that verdict; a card repeating its section heading). Headings are never
+    dropped. The text stays once, so nothing is lost.
+    """
+    seen: set[str] = set()
+    kept: list[A2UIComponent] = []
+    for component in components:
+        text = _key(" ".join(s for s in _leaf_strings(component.props) if s.strip()))
+        if text and text in seen and component.type != "heading":
+            continue
+        seen.add(text)
+        kept.append(component)
+    return kept
+
+
 def _bullet_list(texts: list[str]) -> A2UIComponent:
     return A2UIComponent(
         type="bulletList", id="bullet-list", props={"items": [{"text": t} for t in texts]}, zone="content",
@@ -329,7 +402,7 @@ def _split_cells(line: str) -> list[str]:
     return [c.replace("\\|", "|").strip() for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
 
 
-def _table_components(body: str, component_tokens: list[set[str]]) -> tuple[str, list[A2UIComponent]]:
+def _table_components(body: str, leaves: list[str]) -> tuple[str, list[A2UIComponent]]:
     """
     Pull markdown tables (header, separator, rows) out of the body. A table no component already
     covers becomes ONE dataTable (every cell kept); covered tables are just removed from the body.
@@ -342,7 +415,7 @@ def _table_components(body: str, component_tokens: list[set[str]]) -> tuple[str,
             return match.group(0)  # not a real table: leave rows to the item path
         headers = _split_cells(lines[0])
         rows = [(_split_cells(ln) + [""] * len(headers))[: len(headers)] for ln in lines[2:]]
-        if not _is_covered(" ".join(c for row in rows for c in row), component_tokens):
+        if not all(_line_covered(c, leaves) for row in rows for c in row):
             tables.append(A2UIComponent(
                 type="dataTable", id="data-table", props={"headers": headers, "rows": rows}, zone="content",
             ))
@@ -353,21 +426,20 @@ def _table_components(body: str, component_tokens: list[set[str]]) -> tuple[str,
 
 def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UIComponent]:
     """
-    Gap-fill for source text no component covers. Markdown tables become a dataTable; items carrying
-    evidence are kept verbatim in ONE bulletList; the remaining uncovered items are merged in full
-    (never cut) into a second one.
+    Gap-fill for source text no component carries verbatim. Markdown tables become a dataTable; items
+    carrying evidence are kept verbatim in ONE bulletList; the remaining uncovered items are merged in
+    full (never cut) into a second one. Coverage is exact text, never token overlap: a component holding
+    two of an item's three sentences, or the body without its label, leaves the item uncovered.
     """
-    component_tokens = [_tokens(_component_text(c)) for c in built]
-    body, tables = _table_components(body, component_tokens)
+    leaves = _coverage_leaves(built)
+    body, tables = _table_components(body, leaves)
     evidence: list[str] = []
     rest: list[str] = []
-    for _, text in extract_source_items(body):
-        if _is_covered(text, component_tokens):
+    for _, lines in _source_item_lines(body):
+        text = _uncovered_text(lines, leaves)
+        if not text:
             continue
-        if has_evidence(text):
-            evidence.append(_plain(text))
-        else:
-            rest.append(_plain(text))
+        (evidence if has_evidence(text) else rest).append(_plain(text))
     return [*tables, *(_bullet_list(items) for items in (evidence, rest) if items)]
 
 
@@ -385,7 +457,7 @@ async def _build_section(
     layout = {"layout_type": "summary_layout", "confidence": 1.0, "reasoning": "report section"}
     built: list[A2UIComponent] = []
     heading = (
-        [A2UIComponent(type="heading", id="heading", props={"text": title, "level": level}, zone="content")]
+        [A2UIComponent(type="heading", id="heading", props={"text": strip_label_colon(title), "level": level}, zone="content")]
         if title else []
     )
     # Reason: a heading with no body has nothing to structure; the selector returns no
@@ -404,7 +476,7 @@ async def _build_section(
     # Reason: coverage runs on the built components; the repeat/blank pass then runs over everything
     # (LLM output + gap-fill) so a paragraph split across components and gap-filled whole shows once.
     body_components = drop_repeated_prose(drop_empty_components([*built, *coverage_components(body, built)]))
-    return [*heading, *body_components]
+    return drop_duplicate_components([*heading, *body_components])
 
 
 def _opening(preamble: str) -> list[A2UIComponent]:
@@ -413,7 +485,7 @@ def _opening(preamble: str) -> list[A2UIComponent]:
     rest = preamble.strip()
     m = re.match(r"#\s+(.+)", rest)
     if m:
-        out.append(A2UIComponent(type="heading", id="heading", props={"text": m.group(1).strip(), "level": 1}, zone="content"))
+        out.append(A2UIComponent(type="heading", id="heading", props={"text": strip_label_colon(m.group(1).strip()), "level": 1}, zone="content"))
         rest = rest[m.end():]
     return [*out, *coverage_components(rest, [])]
 

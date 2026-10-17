@@ -462,3 +462,130 @@ async def test_every_source_number_survives_the_cleanup_pipeline():
     assert numbers, "fixture should contain numbers"
     missing = [n for n in set(numbers) if n.strip(",.") not in visible]
     assert not missing, missing
+
+
+# --- text-loss root cause: partial token overlap counted as "covered" -----------------------------
+
+S1 = "الفكرة واضحة نسبيًا؛ فهي تقدم خدمة تصميم مواقع احترافية."
+S2 = "وتتمثل المشكلة المستهدفة في تحسين الحضور الرقمي للشركات الاستشارية."
+S3 = "ومع ذلك، قد يكون من الأفضل توضيح ميزات الخدمة التنافسية."
+
+
+def _gap_text(body: str, built: list[A2UIComponent]) -> str:
+    return "\n".join(s for c in coverage_components(body, built) for s in _all_strings(c.props))
+
+
+def test_partially_covered_paragraph_is_gap_filled_whole():
+    # The component holds sentences 2-3 (2/3 of the tokens, above the old 0.6 threshold): sentence 1 was lost.
+    gap = _gap_text(f"الوضوح:\n{S1} {S2} {S3}", [_comp("calloutCard", title="الوضوح:", content=f"{S2} {S3}")])
+    assert S1 in gap
+
+
+def test_label_line_missing_from_components_is_gap_filled():
+    body = "التحديد:\nالعملاء المستهدفون محددون جيدًا؛ إذ تركز الفكرة على مكاتب المحاماة والشركات الاستشارية في السعودية."
+    built = [_comp("keyTakeaways", items=["العملاء المستهدفون محددون جيدًا؛ إذ تركز الفكرة على مكاتب المحاماة والشركات الاستشارية في السعودية."])]
+    assert "التحديد" in _gap_text(body, built)
+
+
+def test_label_inside_a_longer_sentence_does_not_count_as_covered():
+    gap = _gap_text("مؤشرات الجدوى:\nنص", [_comp("tldr", content="تظهر مؤشرات الجدوى أولية واعدة ونص")])
+    assert "مؤشرات الجدوى" in gap
+
+
+def test_exact_text_in_one_component_is_not_duplicated():
+    body = f"الوضوح:\n{S1}\n\n- {S2}"
+    built = [_comp("headlineCard", title="الوضوح:"), _comp("calloutCard", content=S1), _comp("bulletList", items=[{"text": S2}])]
+    assert coverage_components(body, built) == []
+
+
+def test_label_merged_into_a_component_with_its_body_is_covered():
+    body = f"مؤشرات الجدوى:\n{S1}"
+    assert coverage_components(body, [_comp("bulletList", items=[{"text": f"مؤشرات الجدوى: {S1}"}])]) == []
+
+
+# --- repeated verdict / heading echo ---------------------------------------------------------------
+
+def test_component_whose_whole_text_repeats_another_is_dropped_keeping_first():
+    from section_orchestrator import drop_duplicate_components
+
+    head = _comp("headlineCard", title="واعد", summary="")
+    echo = _comp("calloutCard", type="info", title="", content="واعد")
+    long = _comp("tldr", content="ملخص طويل لا يتكرر")
+    assert drop_duplicate_components([head, long, echo]) == [head, long]
+    assert drop_duplicate_components([echo, head]) == [echo]
+
+
+def test_component_repeating_the_section_heading_is_dropped_and_distinct_text_kept():
+    from section_orchestrator import drop_duplicate_components
+
+    heading = _comp("heading", text="التقييم المبدئي", level=2)
+    echo = _comp("headlineCard", title="التقييم المبدئي")
+    other = _comp("calloutCard", title="", content="نص مختلف")
+    assert drop_duplicate_components([heading, echo, other]) == [heading, other]
+
+
+# --- trailing colon on headings / labels only --------------------------------------------------------
+
+def test_trailing_colon_stripped_from_headings_and_labels_not_from_prose():
+    from section_orchestrator import clean_component
+
+    assert clean_component(_comp("heading", text="مؤشرات الجدوى:", level=3)).props["text"] == "مؤشرات الجدوى"
+    assert clean_component(_comp("headlineCard", title="الوضوح：", summary="ملخص:")).props == {"title": "الوضوح", "summary": "ملخص:"}
+    assert clean_component(_comp("stepCard", title="الاكتمال:", description="مثل:")).props == {"title": "الاكتمال", "description": "مثل:"}
+    assert clean_component(_comp("calloutCard", title="تنبيه:", content="يشمل ما يلي:")).props == {"title": "تنبيه", "content": "يشمل ما يلي:"}
+    assert clean_component(_comp("statCard", label="الحجم:", value="5:")).props == {"label": "الحجم", "value": "5:"}
+    assert clean_component(_comp("tldr", content="نص ينتهي بنقطتين:")).props["content"] == "نص ينتهي بنقطتين:"
+
+
+# --- property: every source LINE survives, lossy LLM included -----------------------------------------
+
+def _line_key(text: str) -> str:
+    import re
+    text = re.sub(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)", "", text.strip())
+    text = re.sub(r"[*_`]", "", text)
+    return " ".join(text.rstrip(":：").split())
+
+
+def _source_lines(md: str) -> list[str]:
+    import re
+    out = []
+    for raw in md.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("|") or re.fullmatch(r"[-*_=\s]+", line):
+            continue
+        key = _line_key(line)
+        if re.search(r"\w", key):
+            out.append(key)
+    return out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["analyze-run3-edited.md", "analyze-run5-edited.md"])
+async def test_every_source_line_survives_a_lossy_llm(name):
+    import os
+    import re
+
+    path = FIXTURE.replace("analyze-run3-edited.md", name)
+    if not os.path.exists(path):
+        pytest.skip("fixture report not available")
+    from llm_orchestrator import apply_layout_and_zone, build_a2ui_component, expand_component_specs
+
+    md = open(path, encoding="utf-8").read()
+
+    async def select(analysis, layout, text, extra):
+        # Lossy LLM mock: per item it silently drops the label line, or the first sentence, or the whole item.
+        specs = []
+        for n, (_, item) in enumerate(extract_source_items(text.split("\n\n", 1)[-1])):
+            sentences = [s for s in re.split(r"(?<=[.؟!])\s+", item) if s.strip()]
+            if n % 3 == 0 and len(sentences) > 1:
+                sentences = sentences[1:]
+            elif n % 3 == 1:
+                continue
+            specs.append({"component_type": "calloutCard", "props": {"title": "", "content": " ".join(sentences)}})
+        return specs or [{"component_type": "tldr", "props": {"content": ""}}]
+
+    out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
+    visible = _line_key(" ".join(s for c in out for s in _all_strings({k: v for k, v in c.props.items() if k != "url"})))
+    visible_cells = " ".join(visible.split())
+    missing = [ln for ln in _source_lines(md) if ln not in visible_cells]
+    assert not missing, missing
