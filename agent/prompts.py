@@ -159,7 +159,7 @@ Choose ONE of the following layout types:
 ### 5. summary_layout
 **Best for**: Notes, quick references, TL;DR content
 **Characteristics**:
-- Condensed information display
+- Short, quick-scan display of the document's own text
 - Tag clouds and keywords
 - Quick-scan cards
 - Highlights and callouts
@@ -411,7 +411,7 @@ You MUST follow these rules to ensure thorough content representation:
 ### Rule 1: Cover ALL Major Content Sections
 - **Generate a component for EVERY major section/topic in the document**
 - If document has 10 sections/topics, generate components for ALL 10, not just 2-3
-- Bullet points WITHIN a section should be collapsed into a SINGLE component (keyTakeaways, calloutCard, or bulletList) — do NOT create one component per bullet point
+- Bullet points WITHIN a section go together in ONE keyTakeaways, calloutCard or bulletList, each bullet's text copied unchanged — do NOT create one component per bullet point
 - Minimum: Generate 1-2 components per major section + summary components
 
 ### Rule 2: Scale With Document Size
@@ -504,10 +504,9 @@ Return a JSON array of component specifications:
       "component_type": "tldr",
       "priority": "high",
       "zone": "hero",
-      "data_source": "summary of first 2-3 paragraphs",
+      "data_source": "the document's own TL;DR paragraph",
       "props": {{
-        "content": "The document's own TL;DR text, copied word for word",
-        "max_length": 200,
+        "content": "The document's own TL;DR text, copied word for word from the document",
         "width_hint": "full"
       }},
       "rationale": "Provides quick overview at document start"
@@ -516,12 +515,12 @@ Return a JSON array of component specifications:
       "component_type": "statCard",
       "priority": "high",
       "zone": "metrics",
-      "data_source": "extract number from 'Market size: $196B' mention",
+      "data_source": "a figure with its label, copied from the document",
       "props": {{
-        "value": "$196B",
-        "label": "AI Market Size",
+        "value": "<the figure exactly as written in the document>",
+        "label": "<label taken from the document, in the document's language>",
         "trend": "up",
-        "trendValue": "+23%",
+        "trendValue": "<the change exactly as written in the document, only if it states one>",
         "width_hint": "third"
       }},
       "rationale": "Highlights key market metric"
@@ -531,10 +530,10 @@ Return a JSON array of component specifications:
       "priority": "high",
       "zone": "metrics",
       "props": {{
-        "value": "45%",
-        "label": "Growth Rate",
+        "value": "<the figure exactly as written in the document>",
+        "label": "<label taken from the document, in the document's language>",
         "trend": "up",
-        "trendValue": "+5%",
+        "trendValue": "<the change exactly as written in the document, only if it states one>",
         "width_hint": "third"
       }},
       "rationale": "Shows growth alongside market size"
@@ -544,10 +543,10 @@ Return a JSON array of component specifications:
       "priority": "high",
       "zone": "insights",
       "props": {{
-        "items": ["Key point 1", "Key point 2", "Key point 3"],
+        "items": ["<first item, copied word for word from the document>", "<second item, copied word for word>", "<third item, copied word for word>"],
         "width_hint": "half"
       }},
-      "rationale": "Summarizes main points"
+      "rationale": "Short parallel items from the document, text unchanged"
     }}
   ],
   "variety_check": {{

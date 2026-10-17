@@ -646,3 +646,19 @@ class TestPromptEdgeCases:
         assert 'Section 0' in result
         assert 'Section 29' in result
         assert '100 total' in result
+
+
+class TestExamplesCopyTheDocument:
+    """The component examples must show copying, never summarising / inventing labels (VERBATIM_COPY_RULE)."""
+
+    @pytest.mark.parametrize("phrase", [
+        "max_length", "summary of first", "AI Market Size", "Summarizes main points",
+        "Condensed information display", "collapsed into a SINGLE component",
+    ])
+    def test_contradicting_wording_is_gone(self, phrase):
+        assert phrase not in COMPONENT_SELECTION_PROMPT
+        assert phrase not in LAYOUT_SELECTION_PROMPT
+
+    def test_examples_say_copy_and_take_labels_from_the_source(self):
+        assert "copied word for word from the document" in COMPONENT_SELECTION_PROMPT
+        assert "label taken from the document" in COMPONENT_SELECTION_PROMPT

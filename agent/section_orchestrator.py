@@ -56,6 +56,7 @@ Read the section top to bottom. Every line goes into exactly one component, in s
 - Ordered actions -> stepCard, one per step. Quotes with a named author -> quoteCard. A table -> dataTable.
 - A label line followed by text becomes the `title` of the card that holds that text. Give sibling cards of one group the same shape: all titled or all untitled.
 - A paragraph of explanation -> a calloutCard or tldr holding the paragraph; a list that fits no card above -> bulletList (text unchanged).
+- Use the card type that fits each piece: numbers -> statCard, steps -> stepCard, short parallel items -> keyTakeaways, a key judgement -> calloutCard; avoid using one type for everything.
 - Choose each card by its text; variety follows from the content, so do not pick a type to reach a count.
 - Fill only props the component defines; put the source words in those props.
 """
@@ -197,9 +198,21 @@ _EVIDENCE_RE = re.compile(
 _NAMED_RE = re.compile(r"(?<=\s)[A-Z][A-Za-z0-9&.-]{2,}")
 
 
+# Arabic text: a quoted name, or the word after an organisation noun (شركة أرامكو, منصة سلة, مؤسسة ...).
+_QUOTED_NAME_RE = re.compile(r"[\u00ab\u201c\"][^\u00bb\u201d\"\n]{2,60}[\u00bb\u201d\"]")
+_ORG_NOUNS = "شركة|منصة|مؤسسة|منظمة|هيئة|وزارة|بنك|مجموعة|جامعة|تطبيق"
+_NOT_A_NAME = "في|من|على|إلى|التي|الذي|تعمل|تقدم|ذات|عامة|كبيرة|ناشئة|جديدة|ما|هي|هو|أو|و"
+_ORG_NAME_RE = re.compile(rf"(?<!\w)(?:{_ORG_NOUNS})\s+(?!(?:{_NOT_A_NAME})(?!\w))[\u0621-\u064aA-Za-z0-9]{{2,}}")
+_ARABIC_RE = re.compile(r"[\u0600-\u06ff]")
+# A Latin brand inside Arabic text: any Latin word of 3+ letters with a capital (WhatsApp, iPhone, Careem).
+_LATIN_BRAND_RE = re.compile(r"(?<![A-Za-z])(?=[A-Za-z0-9&.-]*[A-Z])[A-Za-z][A-Za-z0-9&.-]{2,}")
+
+
 def has_evidence(text: str) -> bool:
     """True when the text carries a number, currency, date, URL or named entity worth keeping verbatim."""
-    return bool(_EVIDENCE_RE.search(text) or _NAMED_RE.search(text))
+    if _EVIDENCE_RE.search(text) or _NAMED_RE.search(text) or _QUOTED_NAME_RE.search(text) or _ORG_NAME_RE.search(text):
+        return True
+    return bool(_ARABIC_RE.search(text) and _LATIN_BRAND_RE.search(text))
 
 
 def _source_item_lines(body: str) -> list[tuple[str, list[str]]]:

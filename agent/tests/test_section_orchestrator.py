@@ -1111,3 +1111,35 @@ def test_source_units_stays_linear_on_a_huge_item():
     body = " ".join(f"جملة رقم {i} في فقرة طويلة." for i in range(3000))
     units = _source_units(body)
     assert len(units) <= 3000 * 6 + 1
+
+
+@pytest.mark.parametrize("text", [
+    "استحوذت شركة أرامكو على حصة كبيرة",
+    "أطلقت منصة سلة خدمة جديدة",
+    "صرّحت مؤسسة النقد بذلك",
+    "ظهر منافس باسم «نون» في السوق",
+    'ظهر منافس باسم "نون" في السوق',
+    "نستخدم WhatsApp للتواصل مع العملاء",
+    "نستخدم iPhone للتصوير",
+])
+def test_arabic_source_names_count_as_evidence(text):
+    from section_orchestrator import has_evidence
+    assert has_evidence(text)
+
+
+@pytest.mark.parametrize("text", [
+    "هذا نص عام بدون أي تفاصيل محددة",
+    "تحتاج الشركات الاستشارية إلى مواقع جيدة",
+    "هناك شركة تعمل في هذا المجال منذ فترة",
+    "generally the situation is quite complex",
+])
+def test_plain_arabic_prose_is_not_evidence(text):
+    from section_orchestrator import has_evidence
+    assert not has_evidence(text)
+
+
+def test_section_instructions_nudge_card_variety_positively():
+    from section_orchestrator import SECTION_INSTRUCTIONS
+    text = SECTION_INSTRUCTIONS.lower()
+    assert "use the card type that fits each piece" in text
+    assert "avoid using one type for everything" in text
