@@ -23,6 +23,7 @@ import re
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from a2ui_generator import A2UIComponent
+from logger import logger
 from prompts import VERBATIM_COPY_RULE
 
 # Documents with at least this many H2 sections take the section path (routing by
@@ -888,6 +889,140 @@ def place_partial_lines(body: str, built: list[A2UIComponent]) -> list[A2UICompo
     return out
 
 
+def _source_sentences(body: str) -> list[str]:
+    """Sentences (labels included) of every non-table source line, in source order."""
+    return [
+        sentence
+        for kind, lines in _source_item_lines(body) if kind != "row"
+        for line in lines for sentence in _sentences(line) if _fold(sentence)
+    ]
+
+
+def _source_sentence_keys(body: str) -> list[str]:
+    """Folded `_source_sentences`."""
+    return [_fold(sentence) for sentence in _source_sentences(body)]
+
+
+def _component_positions(component: A2UIComponent, keys: list[str]) -> list[int]:
+    """Ascending source positions of the source sentences a component's text carries."""
+    found: set[int] = set()
+    leaves = _coverage_leaves([component])
+    # Reason: a card may split one source sentence across fields ("title: description"); its joined text carries it.
+    for leaf in [*leaves, " ".join(leaves)] if len(leaves) > 1 else leaves:
+        for n, key in enumerate(keys):
+            if len(key.split()) >= MIN_SUBSTRING_WORDS:
+                hit = _contains(leaf, key)
+            else:  # a label is a leaf of its own (or opens one), never a word found inside a sentence
+                hit = leaf == key or leaf.startswith(key + " ")
+            if hit:
+                found.add(n)
+    return sorted(found)
+
+
+def order_violations(body: str, components: list[A2UIComponent]) -> list[str]:
+    """
+    Source sentences shown (first occurrence) after a LATER source sentence. Empty when the component
+    order follows the source order. Used by the order tests and the replay report.
+    """
+    keys = _source_sentence_keys(body)
+    seen: set[int] = set()
+    top = -1
+    out: list[str] = []
+    for component in components:
+        if component.type == "heading":
+            continue
+        for n in _component_positions(component, keys):
+            if n in seen:
+                continue
+            seen.add(n)
+            if n < top:
+                out.append(keys[n])
+            top = max(top, n)
+    return out
+
+
+def _sort_key(positions: list[int], keys: list[str]) -> int | None:
+    """Where a card belongs: its first SENTENCE (a label repeated on several cards does not pull them together)."""
+    sentences = [n for n in positions if len(keys[n].split()) >= MIN_SUBSTRING_WORDS]
+    return min(sentences or positions, default=None)
+
+
+def order_by_source(components: list[A2UIComponent], body: str) -> list[A2UIComponent]:
+    """
+    Final order = source order. Each component sits at the source position of the first sentence it carries;
+    a gap-fill bulletList whose items come from different places is split so each item takes its own place
+    (adjacent pieces of one list are joined again). A component carrying no source sentence (a figure, a
+    table) stays right after the component before it. The section heading stays first. Nothing is changed
+    but the order.
+    """
+    keys = _source_sentence_keys(body)
+    ranked: list[tuple[int, int, A2UIComponent, int]] = []  # (position, tie-break, component, origin)
+    last = -1
+    for origin, component in enumerate(components):
+        items = component.props.get("items")
+        if component.type == "bulletList" and isinstance(items, list) and len(items) > 1:
+            pieces = [
+                A2UIComponent(type="bulletList", id=component.id, props={**component.props, "items": [item]}, zone=component.zone, layout=component.layout)
+                for item in items
+            ]
+        else:
+            pieces = [component]
+        for piece in pieces:
+            position = _sort_key(_component_positions(piece, keys), keys)
+            if piece.type == "heading":
+                position = -1
+            elif position is None:
+                position = last
+            else:
+                last = position
+            ranked.append((position, len(ranked), piece, origin))
+    ranked.sort(key=lambda u: (u[0], u[1]))
+    out = _merge_pieces(ranked)
+    return _hoist_labels(out, body, keys)
+
+
+def _merge_pieces(ranked: list[tuple[int, int, A2UIComponent, int]]) -> list[A2UIComponent]:
+    out: list[A2UIComponent] = []
+    previous_origin = None
+    for _, _, piece, origin in ranked:
+        if out and previous_origin == origin and piece.type == "bulletList" and out[-1].type == "bulletList":
+            out[-1].props = {**out[-1].props, "items": [*out[-1].props["items"], *piece.props["items"]]}
+        else:
+            out.append(piece)
+        previous_origin = origin
+    return out
+
+
+def _hoist_labels(components: list[A2UIComponent], body: str, keys: list[str]) -> list[A2UIComponent]:
+    """
+    A card can carry a label together with a LATER sentence while the sentences right after the label sit on
+    other cards ("label / s1 / s2" shown as s1, then "label + s2"). The label is then shown first, as a
+    title-only card in front of the first card that holds text after it; a calloutCard that repeated the label
+    as its title loses that duplicate. Only text order changes; no word is added or lost.
+    """
+    sentences = _source_sentences(body)
+    seen: set[int] = set()
+    top = -1
+    inserts: list[tuple[int, int]] = []  # (index in components, source position of the label)
+    for i, component in enumerate(components):
+        if component.type == "heading":
+            continue
+        for n in _component_positions(component, keys):
+            if n not in seen and n < top and len(keys[n].split()) < MIN_SUBSTRING_WORDS:
+                at = next(j for j, c in enumerate(components) if any(m > n for m in _component_positions(c, keys)))
+                inserts.append((at, n))
+                if component.type == "calloutCard" and _fold(str(component.props.get("title", ""))) == keys[n]:
+                    component.props = {**component.props, "title": ""}
+            seen.add(n)
+            top = max(top, n)
+    out = list(components)
+    for at, n in sorted(inserts, key=lambda t: (t[0], t[1]), reverse=True):
+        out.insert(at, A2UIComponent(
+            type="headlineCard", id="headline-card", props={"title": strip_label_colon(_plain(sentences[n])), "summary": ""}, zone="content",
+        ))
+    return out
+
+
 async def _build_section(
     title: str,
     body: str,
@@ -928,7 +1063,10 @@ async def _build_section(
     body_components = place_labels_before_bodies(body_components, body)
     # Reason: after the repeat pass, because it can move a survivor next to the cards that echo it.
     body_components = drop_steps_echoed_by_lists(body_components)
-    return group_short_rows(drop_duplicate_components([*heading, *body_components]), section_id)
+    ordered = order_by_source(drop_duplicate_components([*heading, *body_components]), body)
+    if late := order_violations(body, ordered):
+        logger.warning(f"[ORDER] section {title!r}: {len(late)} sentence(s) still out of source order: {[s[:40] for s in late[:3]]}")
+    return group_short_rows(ordered, section_id)
 
 
 def _opening(preamble: str) -> list[A2UIComponent]:

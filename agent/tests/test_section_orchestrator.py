@@ -117,9 +117,10 @@ async def test_orchestrate_sections_keeps_llm_components_between_heading_and_gap
     out = [c async for c in orchestrate_sections(
         REPORT, select, build, lambda s: s, lambda c, s: c,
     )]
-    first = [c.type for c in out[1:4]]  # out[0] is the level-1 title
-    # heading, LLM callout, then ONE merged gap-fill list (intro paragraph + uncovered bullet)
-    assert first == ["heading", "calloutCard", "bulletList"]
+    first = [c.type for c in out[1:5]]  # out[0] is the level-1 title
+    # source order: heading, gap-fill (label + intro paragraph), the LLM callout (first bullet), gap-fill (second bullet)
+    assert first == ["heading", "bulletList", "calloutCard", "bulletList"]
+    assert [i["text"] for i in out[2].props["items"]] == ["Card 1 Intro paragraph number 1 about the market."]
 
 
 def test_gap_fill_never_truncates_and_turns_tables_into_data_table():

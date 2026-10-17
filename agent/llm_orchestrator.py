@@ -564,6 +564,37 @@ def expand_component_specs(specs: list[dict]) -> list[dict]:
     return expanded
 
 
+def _text(value) -> str:
+    """Display text of a prop however the model shaped it: str, list of strings (joined), number; None -> ''."""
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return " ".join(t for t in (_text(v) for v in value) if t)
+    if isinstance(value, dict):
+        return _text(next((value[k] for k in ("text", "content", "value", "description") if k in value), None))
+    return ""
+
+
+def _first_text(props: dict, *keys: str) -> str:
+    """First non-empty text among the alias keys."""
+    return next((t for k in keys if (t := _text(props.get(k)))), "")
+
+
+def _text_card(title: str, content: str, origin: str) -> A2UIComponent:
+    """A component that cannot be its own type keeps its text as a calloutCard (never dropped)."""
+    logger.warning(f"[FALLBACK] {origin} -> calloutCard (text kept)")
+    return generate_callout_card(type="info", title=title, content=content)
+
+
+# A stat value is a figure; a sentence in it means the model used statCard as a text card.
+STAT_VALUE_MAX_WORDS = 4
+CALLOUT_TYPES = frozenset({"info", "warning", "success", "error", "tip", "note"})
+
+
 def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | None:
     """
     Build an A2UIComponent from a specification dictionary.
@@ -576,7 +607,9 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
         A2UIComponent instance or None if invalid
     """
     component_type = spec.get("component_type", "")
-    props = spec.get("props", {})
+    props = spec.get("props")
+    if not isinstance(props, dict):
+        props = {}
 
     # Normalize component type - strip whitespace
     component_type = component_type.strip()
@@ -620,14 +653,11 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
         if component_type == "tldr":
             # Try multiple keys the LLM might use for tldr text
             content = (
-                props.get("content")
-                or props.get("text")
-                or props.get("body")
-                or props.get("summary")
-                or spec.get("data_source")
-                or content_analysis.get("title", "")
+                _first_text(props, "content", "text", "body", "summary")
+                or _text(spec.get("data_source"))
+                or _text(content_analysis.get("title", ""))
             )
-            if not content or not content.strip():
+            if not content:
                 logger.warning("[SKIP] tldr: no content found in props or fallbacks")
                 return None
             content = content.strip()
@@ -656,14 +686,19 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             change_type_map = {"up": "positive", "down": "negative", "positive": "positive", "negative": "negative"}
             change_type = change_type_map.get(trend, "neutral")
 
-            title = props.get("label") or props.get("title")
-            value = props.get("value")
+            title = _first_text(props, "label", "title")
+            value = _text(props.get("value"))
+            if len(value.split()) > STAT_VALUE_MAX_WORDS:
+                return _text_card(title, value, "statCard with a sentence as value")
             if not title or not value:
+                text = value or _first_text(props, "content", "text", "description")
+                if text:
+                    return _text_card(title, text, f"statCard title={title!r} value={value!r}")
                 logger.warning(f"[SKIP] statCard: missing required title={title!r} or value={value!r}")
                 return None
             return generate_stat_card(
                 title=title,
-                value=str(value),
+                value=value,
                 unit=props.get("unit"),
                 change=change_float,
                 change_type=change_type,
@@ -709,13 +744,22 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             return generate_data_table(headers=headers, rows=rows)
 
         elif component_type == "headlineCard":
-            title = props.get("headline") or props.get("title")
+            headline, label = _text(props.get("headline")), _text(props.get("title"))
+            summary = _first_text(props, "subheadline", "subtitle", "summary", "content", "description", "text")
+            # Reason: a title next to a headline is the label of that headline's sentence (label first, body after).
+            title = label if label and headline and label != headline else headline or label
+            if title == label and headline and headline != label:
+                summary = " ".join(t for t in (headline, summary) if t)
+            if title and summary == title:
+                summary = ""
             if not title:
+                if summary:
+                    return _text_card("", summary, "headlineCard without a title")
                 logger.warning("[SKIP] headlineCard: missing required headline/title")
                 return None
             return generate_headline_card(
                 title=title,
-                summary=props.get("subheadline") or props.get("subtitle") or props.get("summary", ""),
+                summary=summary,
                 source=props.get("source", ""),
                 published_at=props.get("timestamp") or props.get("published_at") or props.get("publishedAt", ""),
                 sentiment=props.get("sentiment", "neutral"),
@@ -723,39 +767,44 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             )
 
         elif component_type == "calloutCard":
-            content = props.get("content")
-            if not content or not str(content).strip():
+            title = _text(props.get("title"))
+            content = _first_text(props, "content", "text", "body", "description", "summary", "message")
+            if not content:
+                if title:
+                    return _text_card("", title, "calloutCard with only a title")
                 logger.warning("[SKIP] calloutCard: missing required content")
                 return None
             return generate_callout_card(
-                type=props.get("type", "info"),
-                title=props.get("title", ""),
+                type=props.get("type") if props.get("type") in CALLOUT_TYPES else "info",
+                title=title,
                 content=content
             )
 
         elif component_type == "quoteCard":
-            text = props.get("quote") or props.get("text")
-            if not text or not str(text).strip():
+            text = _first_text(props, "quote", "text", "content", "body")
+            if not text:
                 logger.warning("[SKIP] quoteCard: missing required quote text")
                 return None
+            author = _first_text(props, "author", "attribution", "by")
+            if not author:
+                # Reason: an unattributed passage is the report's own text, not a quotation; no author is invented.
+                return _text_card(_text(props.get("title")), text, "quoteCard without an author")
             return generate_quote_card(
                 text=text,
-                author=props.get("author", ""),
-                source=props.get("source")
+                author=author,
+                source=_text(props.get("source")) or None
             )
 
         elif component_type == "bulletList":
             # After expansion, each spec has "text". Handle single-item "items" as fallback.
-            text = props.get("text")
+            text = _text(props.get("text"))
             if not text:
-                items = props.get("items", [])
-                text = items[0] if items and isinstance(items, list) and items else None
-            if not text or not str(text).strip():
+                items = props.get("items")
+                text = _text(items[0]) if isinstance(items, list) and items else ""
+            if not text:
                 logger.warning("[SKIP] bulletList: no text content provided by LLM")
                 return None
-            return generate_bullet_point(
-                text=text if isinstance(text, str) else str(text)
-            )
+            return generate_bullet_point(text=text)
 
         elif component_type == "codeBlock":
             code = props.get("code")
@@ -768,16 +817,18 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             )
 
         elif component_type == "stepCard":
-            title = props.get("title")
-            description = props.get("description")
+            title = _text(props.get("title"))
+            body = _first_text(props, "description", "content", "text", "body", "summary")
+            extra = _first_text(props, "detail", "details", "additional_content")
+            description = " ".join(t for t in (body, extra) if t)
             if not title or not description:
-                logger.warning(f"[SKIP] stepCard: missing required title={title!r} or description={description!r}")
+                text = description or title
+                if text:
+                    return _text_card(title if description else "", text, f"stepCard title={title!r} description={description!r}")
+                logger.warning("[SKIP] stepCard: no title or description")
                 return None
-            return generate_step_card(
-                step_number=props.get("step_number", props.get("number", 1)),
-                title=title,
-                description=description
-            )
+            number = next((n for k in ("step_number", "number", "step") if isinstance(n := props.get(k), int) and not isinstance(n, bool) and n > 0), 1)
+            return generate_step_card(step_number=number, title=title, description=description)
 
         elif component_type == "comparisonTable":
             items = props.get("items", [])
@@ -790,6 +841,9 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             item_a = props.get("itemA") or props.get("item_a")
             item_b = props.get("itemB") or props.get("item_b")
             if not item_a or not item_b:
+                text = _first_text(props, "content", "text", "description", "summary")
+                if text:
+                    return _text_card(_text(props.get("title")), text, "vsCard without itemA/itemB")
                 logger.warning(f"[SKIP] vsCard: missing required itemA={item_a!r} or itemB={item_b!r}")
                 return None
             return generate_component("vsCard", {
@@ -810,14 +864,17 @@ def build_a2ui_component(spec: dict, content_analysis: dict) -> A2UIComponent | 
             )
 
         elif component_type == "profileCard":
-            name = props.get("name")
+            name = _text(props.get("name"))
             if not name:
+                text = _first_text(props, "bio", "description", "content", "text")
+                if text:
+                    return _text_card(_first_text(props, "title", "role"), text, "profileCard without a name")
                 logger.warning("[SKIP] profileCard: missing required name")
                 return None
             return generate_component("profileCard", {
                 "name": name,
-                "title": props.get("title") or props.get("role", ""),
-                "bio": props.get("bio") or props.get("description", ""),
+                "title": _first_text(props, "title", "role"),
+                "bio": _first_text(props, "bio", "description"),
                 "imageUrl": props.get("imageUrl") or props.get("avatar"),
                 "links": props.get("links", [])
             })

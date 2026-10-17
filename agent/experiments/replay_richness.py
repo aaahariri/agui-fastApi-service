@@ -82,11 +82,19 @@ async def mock_select(analysis, layout, text, extra, allow_empty=False):
 if os.environ.get("MOCK"):
     lo.select_components_with_llm = mock_select
 
+import logging
+_build_errors = {"n": 0, "skip": 0}
+class _H(logging.Handler):
+    def emit(self, r):
+        m = r.getMessage()
+        if "[BUILD] Failed" in m: _build_errors["n"] += 1
+        if "[SKIP]" in m or "[FALLBACK]" in m: _build_errors["skip"] += 1
+logging.getLogger().addHandler(_H()); logging.getLogger("agent").addHandler(_H())
 import hashlib, pathlib
 CACHE = pathlib.Path(os.environ.get("LLM_CACHE", "/tmp/llm_cache.json"))
 _cache = json.loads(CACHE.read_text()) if CACHE.exists() else {}
 _call = lo.call_llm
-async def cached_call(prompt, system_prompt="", max_tokens=4000, temperature=0.7):
+async def cached_call(prompt, system_prompt="", max_tokens=4000, temperature=0.7, **kw):
     # Reason: key by the section text alone so a recorded LLM answer can be replayed through any pipeline version.
     section = prompt.split("## Actual Document Content", 1)[-1].split("CRITICAL: You must generate", 1)[0]
     import re as _re
@@ -95,7 +103,7 @@ async def cached_call(prompt, system_prompt="", max_tokens=4000, temperature=0.7
     if k not in _cache and os.environ.get("OFFLINE"):
         raise SystemExit("no recorded answer for a section (OFFLINE)")
     if k not in _cache:
-        _cache[k] = await _call(prompt, system_prompt, max_tokens=min(max_tokens, int(os.environ.get("CAP", "16000"))), temperature=temperature)
+        _cache[k] = await _call(prompt, system_prompt, max_tokens=min(max_tokens, int(os.environ.get("CAP", "16000"))), temperature=temperature, **kw)
         CACHE.write_text(json.dumps(_cache, ensure_ascii=False))
     return _cache[k]
 lo.call_llm = cached_call
@@ -136,6 +144,30 @@ async def main(path, show):
     lines = [k(l) for l in md.splitlines() if l.strip() and not l.strip().startswith("|") and not re.fullmatch(r"[-*_=\s]+", l.strip())]
     miss = [l for l in lines if re.search(r"\w", l) and l not in visible]
     print("MISSING_LINES", len(miss), [m[:60] for m in miss[:3]])
+    # per-section checks: order of source sentences, sentence-level coverage, builder errors
+    preamble, sections = so.split_report(md)
+    groups, current = [], None
+    for c in comps:
+        if c.type == "heading" and (c.props.get("level") == 2):
+            current = []; groups.append(current)
+        if current is not None: current.append(c)
+    order_bad, sent_missing = [], []
+    for (title, sbody), grp in zip(sections, groups):
+        bad = so.order_violations(sbody, grp)
+        order_bad += bad
+        if bad and os.environ.get("ORDERDBG"):
+            keys = so._source_sentence_keys(sbody)
+            print("== SECTION", title, "violations", [b[:30] for b in bad])
+            for c in grp:
+                print("   ", c.type, so._component_positions(c, keys), " | ".join(so._leaf_strings(c.props))[:70])
+        leaves = so._coverage_leaves(grp) + [" ".join(so._coverage_leaves([c])) for c in grp]
+        for ln in (l for _, item in so._source_item_lines(sbody) for l in item):
+            sent_missing += so._missing_sentences(ln, leaves)
+    print("ORDER_VIOLATIONS", len(order_bad), [o[:60] for o in order_bad[:5]])
+    print("SENTENCE_MISSING", len(sent_missing), [m[:60] for m in sent_missing[:5]])
+    print("BUILD_ERRORS", _build_errors["n"], "SKIPS", _build_errors["skip"])
+    titled = [(g, [bool((c.props.get("title") or c.props.get("label") or "").strip()) for c in cs]) for g, cs in ((g, [c for c in comps if (c.layout or {}).get("group") == g]) for g in rows)]
+    print("TITLE_PARITY_VIOLATIONS", sum(1 for _, t in titled if len(set(t)) > 1))
     if show:
         print("GAPFILLED", len(gapped)); [print("  +", g) for g in gapped]
         print("DROPPED", len(dropped))
