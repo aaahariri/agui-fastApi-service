@@ -24,3 +24,17 @@ Prints the `https://<workspace>--agui-generate-web.modal.run` URL. Set in the we
 - Modal HTTP requests time out at 150s; longer ones get a 303 redirect to a result URL, which `fetch` follows
   (modal.com/docs/guide/webhook-timeouts). Function `timeout=600`.
 - Verify: `curl -s <url>/health`, then a real `POST <url>/api/generate` with `curl -L -H "Authorization: Bearer $API_KEY"`.
+
+## Local testing uses Codex, not OpenRouter
+Local runs can use the founder's ChatGPT/Codex subscription (`codex login status` must say "Logged in using ChatGPT")
+so no OpenRouter credits are spent. From `agent/`:
+
+```
+LLM_BACKEND=codex JEV_DISABLED=1 uv run uvicorn main:app --port 8000
+```
+
+- `LLM_BACKEND=codex` runs `codex exec` per LLM call (one per `##` section: ~6 free preview, ~12 premium), at most
+  `CODEX_MAX_CONCURRENCY` (default 2) at a time; expect minutes per report. `CODEX_MODEL` overrides the model.
+- `JEV_DISABLED=1` skips the Jev OpenRouter call (heuristic document type).
+- The service refuses to start with `LLM_BACKEND=codex` when a Modal/Railway/Cloud Run marker is set. Never put
+  `LLM_BACKEND=codex` in the Modal secret `agui-generate-secrets`.
