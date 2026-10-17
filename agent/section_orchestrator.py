@@ -389,6 +389,128 @@ def drop_duplicate_components(components: list[A2UIComponent]) -> list[A2UICompo
     return kept
 
 
+# Fields whose long text must be a verbatim slice of the source (prose + step descriptions).
+_TRACE_FIELDS: dict[str, tuple[str, ...]] = {**_PROSE_FIELDS, "stepCard": ("title", "description")}
+
+
+def _source_haystack(body: str) -> str:
+    """Source as displayed text: markdown stripped line by line, hard-wrapped lines joined by a space."""
+    return _norm(" ".join(strip_inline_markdown(line) for line in body.splitlines()))
+
+
+def drop_untraceable_components(components: list[A2UIComponent], body: str) -> list[A2UIComponent]:
+    """
+    /generate copies the source verbatim. A prose component carrying a sentence-sized piece (>= 4 words)
+    that occurs nowhere in the section source is a paraphrase: drop it; gap-fill then restores the
+    source text. Short pieces (labels) are not checked.
+    """
+    haystack = _source_haystack(body)
+    kept: list[A2UIComponent] = []
+    for component in components:
+        fields = _TRACE_FIELDS.get(component.type)
+        pieces = [] if fields is None else [
+            _norm(strip_inline_markdown(s)) for f in fields for s in _leaf_strings(component.props.get(f))
+        ]
+        traceable = all(
+            len(piece.split()) < MIN_SUBSTRING_WORDS
+            or piece in haystack
+            or strip_label_colon(piece) in haystack
+            for piece in pieces
+        )
+        if traceable:
+            kept.append(component)
+    return kept
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", text)
+
+
+def _has_words(hay: list[str], needle: list[str]) -> bool:
+    """Whole-word, contiguous containment of one word sequence in another."""
+    n = len(needle)
+    return n > 0 and any(hay[i:i + n] == needle for i in range(len(hay) - n + 1))
+
+
+def _step_words(component: A2UIComponent) -> list[str]:
+    return _words(" ".join(_leaf_strings([component.props.get("title"), component.props.get("description")])))
+
+
+def _item_words(component: A2UIComponent) -> list[list[str]]:
+    return [w for s in _leaf_strings(component.props.get("items")) if (w := _words(s))]
+
+
+def drop_steps_echoed_by_lists(components: list[A2UIComponent]) -> list[A2UIComponent]:
+    """
+    A run of stepCards directly next to a bulletList that carries the same text shows it twice. Keep one:
+    the stepCards (richer structure) when the list adds nothing beyond them, otherwise the list that
+    holds all the text. Whole-word matching only; nothing is reworded.
+    """
+    drop: set[int] = set()
+    for i, component in enumerate(components):
+        if component.type != "bulletList":
+            continue
+        items = _item_words(component)
+        run: list[int] = []
+        for rng in (range(i - 1, -1, -1), range(i + 1, len(components))):
+            side = []
+            for k in rng:
+                if components[k].type != "stepCard":
+                    break
+                side.append(k)
+            run += side
+        steps = {k: _step_words(components[k]) for k in run}
+        if not items or not steps:
+            continue
+        if all(any(_has_words(w, item) for w in steps.values()) for item in items):
+            drop.add(i)
+            continue
+        drop.update(k for k, w in steps.items() if any(_has_words(item, w) for item in items))
+    return [c for i, c in enumerate(components) if i not in drop]
+
+
+# Types the web can place inside a columnLayout (COMPOSABLE_TYPES in lib/utils/agui-block-mapping.ts).
+_ROW_TYPES = frozenset({"statCard", "stepCard", "headlineCard", "profileCard", "calloutCard", "linkPreview"})
+ROW_MAX_CARDS = 4
+ROW_MAX_CHARS = 220
+
+
+def _is_row_card(component: A2UIComponent) -> bool:
+    if component.type not in _ROW_TYPES:
+        return False
+    return len(_norm(" ".join(_leaf_strings(component.props)))) <= ROW_MAX_CHARS
+
+
+def group_short_rows(components: list[A2UIComponent], section_id: str) -> list[A2UIComponent]:
+    """
+    Mark runs of 2-4 consecutive short composable cards as one side-by-side row via `layout.group`.
+    Longer runs split into balanced rows (never a lone card). Order and content are never changed.
+    """
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for i, component in enumerate(components):
+        if _is_row_card(component):
+            current.append(i)
+            continue
+        runs.append(current)
+        current = []
+    runs.append(current)
+    row = 0
+    for run in runs:
+        if len(run) < 2:
+            continue
+        rows = -(-len(run) // ROW_MAX_CARDS)
+        base, extra = divmod(len(run), rows)
+        start = 0
+        for r in range(rows):
+            size = base + (1 if r < extra else 0)
+            row += 1
+            for k in run[start:start + size]:
+                components[k].layout = {**(components[k].layout or {}), "group": f"{section_id}-row-{row}"}
+            start += size
+    return components
+
+
 def _bullet_list(texts: list[str]) -> A2UIComponent:
     return A2UIComponent(
         type="bulletList", id="bullet-list", props={"items": [{"text": t} for t in texts]}, zone="content",
@@ -424,6 +546,14 @@ def _table_components(body: str, leaves: list[str]) -> tuple[str, list[A2UICompo
     return _TABLE_BLOCK_RE.sub(take, body), tables
 
 
+MAX_LABEL_WORDS = 5
+
+
+def _standalone_label(text: str) -> str:
+    """A short label-only line emitted on its own drops its trailing colon (format, not content)."""
+    return strip_label_colon(text) if _TRAILING_COLON_RE.search(text) and len(text.split()) <= MAX_LABEL_WORDS else text
+
+
 def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UIComponent]:
     """
     Gap-fill for source text no component carries verbatim. Markdown tables become a dataTable; items
@@ -439,7 +569,7 @@ def coverage_components(body: str, built: list[A2UIComponent]) -> list[A2UICompo
         text = _uncovered_text(lines, leaves)
         if not text:
             continue
-        (evidence if has_evidence(text) else rest).append(_plain(text))
+        (evidence if has_evidence(text) else rest).append(_standalone_label(_plain(text)))
     return [*tables, *(_bullet_list(items) for items in (evidence, rest) if items)]
 
 
@@ -452,6 +582,7 @@ async def _build_section(
     apply_fn: Callable[[A2UIComponent, dict], A2UIComponent],
     semaphore: asyncio.Semaphore,
     level: int = 2,
+    section_id: str = "s0",
 ) -> list[A2UIComponent]:
     analysis = {"document_type": "report", "title": title or "Report", "sections": [title] if title else []}
     layout = {"layout_type": "summary_layout", "confidence": 1.0, "reasoning": "report section"}
@@ -475,8 +606,12 @@ async def _build_section(
 
     # Reason: coverage runs on the built components; the repeat/blank pass then runs over everything
     # (LLM output + gap-fill) so a paragraph split across components and gap-filled whole shows once.
+    # Reason: paraphrased LLM text is dropped BEFORE coverage so gap-fill restores the verbatim source.
+    built = drop_untraceable_components(built, body)
     body_components = drop_repeated_prose(drop_empty_components([*built, *coverage_components(body, built)]))
-    return drop_duplicate_components([*heading, *body_components])
+    # Reason: after the repeat pass, because it can move a survivor next to the cards that echo it.
+    body_components = drop_steps_echoed_by_lists(body_components)
+    return group_short_rows(drop_duplicate_components([*heading, *body_components]), section_id)
 
 
 def _opening(preamble: str) -> list[A2UIComponent]:
@@ -507,7 +642,7 @@ async def orchestrate_sections(
         opening = []
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
     results = [opening, *await asyncio.gather(*[
-        _build_section(t, b, select_fn, build_fn, expand_fn, apply_fn, semaphore) for t, b in jobs
+        _build_section(t, b, select_fn, build_fn, expand_fn, apply_fn, semaphore, section_id=f"s{n}") for n, (t, b) in enumerate(jobs, 1)
     ])]
     n = 0
     for group in results:

@@ -109,7 +109,7 @@ def test_too_long_input_raises():
 async def test_orchestrate_sections_keeps_llm_components_between_heading_and_gap_fill():
     async def select(analysis, layout, md, extra):
         assert "ONE SECTION" in extra
-        return [{"component_type": "calloutCard", "props": {"content": f"first bullet {analysis['title'][-1]} and more"}}]
+        return [{"component_type": "calloutCard", "props": {"content": f"first bullet {analysis['title'][-1]}"}}]
 
     def build(spec, analysis):
         return _stat(spec["props"]["content"])
@@ -589,3 +589,180 @@ async def test_every_source_line_survives_a_lossy_llm(name):
     visible_cells = " ".join(visible.split())
     missing = [ln for ln in _source_lines(md) if ln not in visible_cells]
     assert not missing, missing
+
+
+# --- round 3: untraceable text, step/bullet echo, standalone labels, side-by-side rows ----------------
+
+V1 = "ينطوي استهداف مكاتب المحاماة والشركات الاستشارية بخدمة تصميم مواقع احترافية على إمكانات قوية."
+V2 = "يتطلب هذا القطاع حضورًا رقميًا متميزًا وخدمات مخصصة لضمان فرص النجاح."
+
+
+def test_component_whose_text_is_not_in_the_source_is_dropped_and_gap_fill_restores_the_source():
+    from section_orchestrator import drop_untraceable_components
+
+    body = f"واعد\n\n{V1} {V2}"
+    paraphrase = _comp("calloutCard", title="", content="يمتلك هذا الاستهداف إمكانات كبيرة جدا في السوق السعودي الواعد")
+    verbatim = _comp("tldr", content=f"{V1} {V2}")
+    label = _comp("headlineCard", title="واعد", summary="")
+    kept = drop_untraceable_components([label, paraphrase, verbatim], body)
+    assert kept == [label, verbatim]
+    # nothing traceable built -> gap-fill carries the whole source text
+    assert V1 in _gap_text(body, drop_untraceable_components([paraphrase], body))
+
+
+def test_traceable_text_survives_markdown_and_hard_wraps():
+    from section_orchestrator import drop_untraceable_components
+
+    body = f"- **{V1}**\n  {V2}"
+    c = _comp("calloutCard", title="", content=f"{V1} {V2}")
+    assert drop_untraceable_components([c], body) == [c]
+
+
+def test_callout_echoing_headline_and_summary_is_dropped():
+    from section_orchestrator import drop_repeated_prose
+
+    head = _comp("headlineCard", title="واعد", summary="")
+    summary = _comp("tldr", content=f"{V1} {V2}")
+    echo = _comp("calloutCard", title="واعد", content=V1)
+    assert drop_repeated_prose([head, summary, echo]) == [head, summary]
+
+
+def test_step_cards_inside_the_bullet_that_follows_are_dropped():
+    from section_orchestrator import drop_steps_echoed_by_lists
+
+    s1 = _comp("stepCard", stepNumber=1, title="إجراء مقابلات مع عملاء", description="تحدث مع مكاتب المحاماة لفهم احتياجاتها.")
+    s2 = _comp("stepCard", stepNumber=2, title="تطوير نموذج أولي", description="أنشئ تصميمًا أوليًا للموقع.")
+    bullets = _comp("bulletList", items=[
+        {"text": "إجراء مقابلات مع عملاء: تحدث مع مكاتب المحاماة لفهم احتياجاتها. واستفسر عن التحديات."},
+        {"text": "تطوير نموذج أولي: أنشئ تصميمًا أوليًا للموقع. واستخدمه لجمع الملاحظات."},
+    ])
+    assert drop_steps_echoed_by_lists([s1, s2, bullets]) == [bullets]
+    assert drop_steps_echoed_by_lists([bullets, s1, s2]) == [bullets]
+
+
+def test_bullet_list_adding_nothing_over_the_step_cards_is_dropped():
+    from section_orchestrator import drop_steps_echoed_by_lists
+
+    s1 = _comp("stepCard", stepNumber=1, title="إجراء مقابلات مع عملاء", description="تحدث مع مكاتب المحاماة لفهم احتياجاتها.")
+    s2 = _comp("stepCard", stepNumber=2, title="تطوير نموذج أولي", description="أنشئ تصميمًا أوليًا للموقع.")
+    bullets = _comp("bulletList", items=[
+        {"text": "إجراء مقابلات مع عملاء: تحدث مع مكاتب المحاماة لفهم احتياجاتها."},
+        {"text": "تطوير نموذج أولي: أنشئ تصميمًا أوليًا للموقع."},
+    ])
+    assert drop_steps_echoed_by_lists([s1, s2, bullets]) == [s1, s2]
+
+
+def test_step_and_list_matching_is_word_bounded_and_needs_adjacency():
+    from section_orchestrator import drop_steps_echoed_by_lists
+
+    step = _comp("stepCard", stepNumber=1, title="خطة", description="أنشئ صفحة")
+    near = _comp("bulletList", items=[{"text": "خطة: أنشئ صفحة الهبوط"}])
+    split = _comp("bulletList", items=[{"text": "خطة التسويق: أنشئ صفحة الهبوط"}])
+    same = _comp("bulletList", items=[{"text": "خطة: أنشئ صفحة"}])
+    sep = _comp("heading", text="عنوان", level=2)
+    assert drop_steps_echoed_by_lists([step, near]) == [near]
+    assert drop_steps_echoed_by_lists([step, same]) == [step]
+    assert drop_steps_echoed_by_lists([step, sep, near]) == [step, sep, near]
+    assert drop_steps_echoed_by_lists([step, split]) == [step, split]  # words not contiguous
+    unrelated = _comp("stepCard", stepNumber=1, title="خطة", description="أنش")  # substring of a word only
+    assert drop_steps_echoed_by_lists([unrelated, near]) == [unrelated, near]
+
+
+def test_standalone_label_from_gap_fill_has_no_trailing_colon():
+    body = f"العملاء المحتملون:\n\n{V1}\n\nإشارات الطلب：\n\nمثال: يشمل ما يلي، وهذه جملة طويلة تنتهي بنقطتين:"
+    texts = [i["text"] for c in coverage_components(body, [_comp("tldr", content=V1)]) for i in c.props["items"]]
+    assert "العملاء المحتملون" in texts and "إشارات الطلب" in texts
+    assert all(t != "العملاء المحتملون:" for t in texts)
+    # a label that opens its own paragraph keeps its colon (it is prose there)
+    kept = [i["text"] for c in coverage_components("الوضوح:\nنص الفقرة الأولى هنا", []) for i in c.props["items"]]
+    assert kept == ["الوضوح: نص الفقرة الأولى هنا"]
+    # longer than five words: untouched
+    long_label = "هذا سطر طويل من ستة كلمات تماما:"
+    assert [i["text"] for c in coverage_components(long_label, []) for i in c.props["items"]] == [long_label]
+
+
+def _short(type_: str, text: str = "نص قصير") -> A2UIComponent:
+    key = {"statCard": "label", "calloutCard": "content", "headlineCard": "title", "stepCard": "title"}[type_]
+    return _comp(type_, **{key: text})
+
+
+def _groups(components: list[A2UIComponent]) -> list[str | None]:
+    return [(c.layout or {}).get("group") for c in components]
+
+
+def test_runs_of_short_cards_get_one_row_group_each():
+    from section_orchestrator import group_short_rows
+
+    three = [_short("statCard"), _short("statCard"), _short("statCard")]
+    pair = [_short("statCard"), _short("calloutCard")]
+    heading = _comp("heading", text="عنوان", level=2)
+    out = group_short_rows([*three, heading, *pair], "s2")
+    g = _groups(out)
+    assert g[0] == g[1] == g[2] and g[0]
+    assert g[3] is None
+    assert g[4] == g[5] and g[4] and g[4] != g[0]
+    assert [c.type for c in out] == [c.type for c in [*three, heading, *pair]]  # order untouched
+
+
+def test_long_or_prose_components_break_a_row_and_lone_cards_stay_ungrouped():
+    from section_orchestrator import group_short_rows
+
+    long_callout = _short("calloutCard", "كلمة " * 60)
+    out = group_short_rows([_short("statCard"), long_callout, _short("statCard"), _short("statCard"), _comp("bulletList", items=[{"text": "x"}]), _short("calloutCard")], "s1")
+    g = _groups(out)
+    assert g[0] is None and g[1] is None and g[2] == g[3] and g[2] and g[4] is None and g[5] is None
+
+
+def test_rows_hold_at_most_four_cards_and_never_leave_a_single():
+    from section_orchestrator import group_short_rows
+
+    out = group_short_rows([_short("statCard") for _ in range(5)], "s1")
+    sizes = sorted(len([c for c in out if (c.layout or {}).get("group") == g]) for g in set(_groups(out)))
+    assert sizes == [2, 3]
+    out = group_short_rows([_short("statCard") for _ in range(4)], "s1")
+    assert len(set(_groups(out))) == 1
+
+
+def test_web_non_composable_types_are_never_grouped():
+    from section_orchestrator import group_short_rows
+
+    out = group_short_rows([_comp("keyTakeaways", items=["أ"]), _comp("vsCard", left="أ", right="ب"), _short("statCard")], "s1")
+    assert _groups(out) == [None, None, None]
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_section_groups_rows_and_stays_lossless():
+    from llm_orchestrator import apply_layout_and_zone, build_a2ui_component, expand_component_specs
+
+    md = "# T\n\n" + "\n\n".join(
+        f"## قسم {i}\n\nالنص الأول {i}\n\nالنص الثاني {i}\n\nالنص الثالث {i}" for i in range(1, 5)
+    )
+
+    async def select(analysis, layout, text, extra):
+        return [{"component_type": "calloutCard", "props": {"title": "", "content": ln}} for ln in text.split("\n\n")[1:] if ln.strip()]
+
+    out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
+    grouped = [c for c in out if (c.layout or {}).get("group")]
+    assert grouped
+    ids = {c.layout["group"] for c in grouped}
+    assert len(ids) == 4 and all(g.startswith("s") and "-row-" in g for g in ids)
+    visible = " ".join(s for c in out for s in _all_strings(c.props))
+    assert all(f"النص {w} {i}" in visible for i in range(1, 5) for w in ("الأول", "الثاني", "الثالث"))
+
+
+@pytest.mark.asyncio
+async def test_step_cards_echoing_a_gap_filled_list_are_dropped_in_the_pipeline():
+    from llm_orchestrator import apply_layout_and_zone, build_a2ui_component, expand_component_specs
+
+    t1, d1 = "إجراء مقابلات مع عملاء محتملين", "تحدث مع مكاتب المحاماة لفهم احتياجاتها في تصميم المواقع."
+    md = "# T\n\n" + "\n\n".join(f"## قسم {i}\n\nنص عادي رقم {i} للقسم" for i in range(1, 4)) + \
+        f"\n\n## الخطوات\n\n- {t1}: {d1} واستفسر عن التحديات التي تواجهها."
+
+    async def select(analysis, layout, text, extra):
+        if "الخطوات" in text:
+            return [{"component_type": "stepCard", "props": {"stepNumber": 1, "title": t1, "description": d1}}]
+        return [{"component_type": "tldr", "props": {"content": "x"}}]
+
+    out = [c async for c in orchestrate_sections(md, select, build_a2ui_component, expand_component_specs, apply_layout_and_zone)]
+    assert not [c for c in out if c.type == "stepCard"]
+    assert t1 in " ".join(s for c in out for s in _all_strings(c.props))
